@@ -1,9 +1,11 @@
 .gradle/
 .idea/
+.DS_Store
 
 /build/
 /dist/
 /app/build/
+/app/debug/
 
 *.apk
 *.aab
