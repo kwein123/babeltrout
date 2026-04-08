@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Babeltrout.Button.Primary" parent="Widget.MaterialComponents.Button">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textColor">@color/on_primary</item>
+        <item name="backgroundTint">@color/primary</item>
+        <item name="cornerRadius">10dp</item>
+        <item name="android:minHeight">44dp</item>
+    </style>
+
+    <style name="Babeltrout.Button.Secondary" parent="Widget.MaterialComponents.Button">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textColor">@color/on_secondary_button</item>
+        <item name="backgroundTint">@color/secondary_button</item>
+        <item name="cornerRadius">10dp</item>
+        <item name="android:minHeight">42dp</item>
+    </style>
+</resources>

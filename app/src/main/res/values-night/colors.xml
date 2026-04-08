@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#121212</color>
+    <color name="surface">#1D1D1F</color>
+    <color name="surface_alt">#26262A</color>
+    <color name="border">#3A3A40</color>
+    <color name="text">#F2F2F5</color>
+    <color name="subtle_text">#B4B4BE</color>
+    <color name="status_text">#F2F2F5</color>
+    <color name="status_error_text">#FF8A80</color>
+    <color name="clickable_surface">#223340</color>
+    <color name="clickable_border">#6A97B2</color>
+    <color name="mic_live">#FF6B6B</color>
+    <color name="mic_idle">#6F6F76</color>
+
+    <color name="primary">#5EB6E3</color>
+    <color name="on_primary">#0D1A22</color>
+    <color name="secondary_button">#F29D5D</color>
+    <color name="on_secondary_button">#25170A</color>
+
+    <color name="output_target_text">#F2F2F5</color>
+    <color name="translit_text">#8BD1A3</color>
+    <color name="source_text">#B4B4BE</color>
+</resources>
