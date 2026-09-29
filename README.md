@@ -59,9 +59,10 @@ enabled (Settings → About phone → tap *Build number* 7 times).
 2. Hold a talk button while speaking and release when done.
 3. Each entry shows the translation, a pronunciation line and your original words. Tap **Speak** to replay it.
 
-**Conversation mode** (*Conversation* button): choose Language A and B, then turn on the mic. Leave
-**Long-speech mode** on (Android 13+) so the app keeps listening through pauses instead of cutting you
-off mid-thought; it translates when you stop talking for about 2.5 seconds.
+**Conversation mode** (*Conversation* button): choose Language A and B, then turn on the mic. On Android 13+
+**Hands-free mic** (default) keeps listening with no beeps and no time limit: just talk, and each pause of
+about a second ends a turn, which is translated and spoken in the other language. It works out which of
+the two languages each person used, even for single words.
 
 ## Build from source
 
@@ -95,7 +96,7 @@ Every push also runs the unit tests via [android-ci.yml](.github/workflows/andro
 | "language unavailable" | Install that language's offline speech pack in Android Settings → Google → Voice, or stay online. |
 | Translation fails for a language | Setup → **Install Assets** again with internet on. |
 | Farsi is silent | Setup → **Diagnose Farsi TTS** and follow its fix list; see [docs/FARSI_VOICES.md](docs/FARSI_VOICES.md). |
-| Conversation mode cuts off long speech | Make sure **Long-speech mode** is on (Android 13+). See [docs/REVIEW-2026.md](docs/REVIEW-2026.md#conversation-mode). |
+| Conversation mode cuts off or beeps | Make sure **Hands-free mic** is on (Android 13+). If it turned itself off, the phone's recognizer rejected app audio; see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#conversation-mode-in-detail). |
 
 ## Credits and licenses
 
@@ -105,6 +106,8 @@ Every push also runs the unit tests via [android-ci.yml](.github/workflows/andro
   [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices) as packaged by sherpa-onnx; each voice's
   license is shown in the Voice Library and in its `MODEL_CARD`. Archives are unpacked with
   [Apache Commons Compress](https://commons.apache.org/proper/commons-compress/) (Apache-2.0).
+- Hands-free conversation: [Silero VAD](https://github.com/snakers4/silero-vad) by Silero Team (MIT),
+  bundled as `app/src/main/assets/silero_vad.onnx` from sherpa-onnx's `asr-models` release, run through sherpa-onnx.
 - Optional Farsi speech via [SherpaTTS](https://github.com/woheller69/ttsEngine) by woheller69, built on
   [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (k2-fsa) and [Piper](https://github.com/rhasspy/piper).
   Babeltrout talks to it through Android's standard TTS interface and does not include its code.

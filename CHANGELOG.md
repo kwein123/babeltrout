@@ -3,6 +3,14 @@
 ## 1.3 (versionCode 4) — unreleased
 
 ### Added
+- **Hands-free conversation** (Android 13+, default on): Babeltrout keeps its own microphone open and
+  uses the Silero voice-activity detector (bundled, 644 KB) to find turns. There are no recognizer
+  restarts, so no beeps and no gaps, and no length limit. The mic is muted while a translation is spoken.
+- Each turn is recognized **twice in parallel**, by recognizers locked to each conversation language, and
+  `TurnLanguageChooser` picks the real one by script, confidence, ML Kit text check, marker words, and
+  turn-taking. This fixes single words ("no speech recognized") and the second language being heard as
+  the first. Recognizer confidence scores that turn out to be fixed placeholders are ignored.
+- Falls back automatically to the classic recognizer mic if a phone's recognizer rejects app audio.
 - **Built-in voices**: Babeltrout now runs Piper voices itself (sherpa-onnx 1.13.8). No SherpaTTS needed.
 - **Voice Library** (Setup): download any of 5 Farsi voices (amir, gyro, ganji, ganji_adabi, reza_ibrahim)
   and 3 Hindi voices, in compact (~21 MB) or full-quality (~67 MB) versions; use, switch or delete them.

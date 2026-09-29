@@ -6,11 +6,13 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioFormat
 import android.media.AudioManager
 import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -174,6 +176,21 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     private var converseLastPartial = ""
     /** Segments collected during an Android 13+ segmented session, joined when the session ends. */
     private val converseSegments = mutableListOf<String>()
+
+    // Hands-free conversation (Android 13+): the app owns the mic; a VAD finds turns and each turn's
+    // audio is streamed into the recognizer. See docs/ARCHITECTURE.md "Conversation mode".
+    private var voiceMic: VoiceActivityMic? = null
+    private var dualRecognizer: DualTurnRecognizer? = null
+    /** Conversation languages, cached for the mic thread (spinners are main-thread only). */
+    @Volatile private var handsFreeCodes: List<String> = emptyList()
+    private val handsFreePartials = linkedMapOf<String, String>()
+    private var handsFreeLastSource: String? = null
+    /** Mode of the conversation currently running (fixed when it starts). */
+    private var converseUsesHandsFree = false
+    /** The recognizer has returned text from app-supplied audio at least once, so the mode works. */
+    private var handsFreeVerified = false
+    /** Consecutive hands-free turns with no text, before any success; used to detect lack of support. */
+    private var handsFreeEmptyTurns = 0
     private var currentPage = UiPage.MAIN
     private var downloadsSummaryText = "Downloads not checked yet."
     private var voicesSummaryText = "Voices not checked yet."
@@ -303,6 +320,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
                 stopConverseMode("Conversation mode stopped: microphone permission is required.")
                 return
             }
+
 
             // Long utterances often end in a timeout or client error. Don't throw away what was heard.
             val salvaged = takeBufferedConverseSpeech(includePartial = true)
@@ -528,12 +546,23 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            binding.switchConverseHandsFree.isChecked = prefs.getBoolean(PREF_CONVERSE_HANDS_FREE, true)
+            binding.switchConverseHandsFree.setOnCheckedChangeListener { _, isChecked ->
+                prefs.edit().putBoolean(PREF_CONVERSE_HANDS_FREE, isChecked).apply()
+                updateClassicConverseSwitches()
+                setStatus(
+                    if (isChecked) "Hands-free mic on (takes effect next time you start the conversation mic)."
+                    else "Hands-free mic off: using the classic recognizer mic."
+                )
+            }
+            updateClassicConverseSwitches()
             binding.switchConverseSegmented.isChecked = prefs.getBoolean(PREF_CONVERSE_SEGMENTED, true)
             binding.switchConverseSegmented.setOnCheckedChangeListener { _, isChecked ->
                 prefs.edit().putBoolean(PREF_CONVERSE_SEGMENTED, isChecked).apply()
                 setStatus(if (isChecked) "Long-speech mode on (applies to the next turn)." else "Long-speech mode off.")
             }
         } else {
+            binding.switchConverseHandsFree.isVisible = false
             binding.switchConverseSegmented.isVisible = false
         }
 
@@ -814,6 +843,38 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         return intent
     }
 
+    /**
+     * Hands-free: one recognizer per conversation language, locked to it (no auto-detect), reading our
+     * turn audio instead of opening the mic. The session lasts until the pipe closes (VAD: turn over).
+     */
+    private fun buildHandsFreeIntent(code: String, audio: ParcelFileDescriptor): Intent {
+        val tag = localeTagForCode(code)
+        return Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, tag)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, tag)
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOfflineRecognition)
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, audio)
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, AudioFormat.ENCODING_PCM_16BIT)
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, VoiceActivityMic.SAMPLE_RATE)
+            putExtra(RecognizerIntent.EXTRA_SEGMENTED_SESSION, RecognizerIntent.EXTRA_AUDIO_SOURCE)
+        }
+    }
+
+    /** Long-speech and idle auto-restart only apply to the classic recognizer mic. */
+    private fun updateClassicConverseSwitches() {
+        val classic = !binding.switchConverseHandsFree.isChecked
+        binding.switchConverseSegmented.isVisible = classic
+        binding.switchConverseAutoRestart.isVisible = classic
+    }
+
+    private fun useHandsFreeConversation(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            prefs.getBoolean(PREF_CONVERSE_HANDS_FREE, true)
+
     private fun useSegmentedConverseSession(): Boolean =
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             prefs.getBoolean(PREF_CONVERSE_SEGMENTED, true)
@@ -849,7 +910,162 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         updateConverseToggleUi()
         updateConverseStatus("Conversation mic is starting...")
         setStatus("Conversation mode started: ${labelForCode(codeA)} <-> ${labelForCode(codeB)}")
-        startConverseListening()
+        converseUsesHandsFree = useHandsFreeConversation()
+        if (converseUsesHandsFree) {
+            startHandsFreeMic()
+        } else {
+            startConverseListening()
+        }
+    }
+
+    // ---- Hands-free conversation ----------------------------------------------------------------
+
+    @android.annotation.SuppressLint("MissingPermission") // checked in startConverseMode
+    private fun startHandsFreeMic() {
+        handsFreeEmptyTurns = 0
+        handsFreeLastSource = null
+        handsFreeCodes = listOf(selectedConverseCodeA(), selectedConverseCodeB())
+        dualRecognizer = DualTurnRecognizer(
+            context = this,
+            buildIntent = ::buildHandsFreeIntent,
+            onPartialText = { code, text ->
+                handsFreePartials[code] = text
+                updateConverseStatus("Hearing: " + handsFreePartials.entries.joinToString("  |  ") { "${labelForCode(it.key)}: ${it.value}" })
+            },
+            onTurnRecognized = ::onHandsFreeTurnRecognized,
+        )
+        val mic = VoiceActivityMic(
+            assets = assets,
+            onEvent = ::onHandsFreeEvent,
+            onError = { error ->
+                runOnUiThread {
+                    if (isConverseActive && converseUsesHandsFree) {
+                        fallBackToClassicConversation("Hands-free mic failed (${error.message}).")
+                    }
+                }
+            },
+        )
+        voiceMic = mic
+        mic.start()
+        updateConverseMicIndicator()
+        updateConverseStatus("Listening hands-free. Just talk; each pause ends a turn.")
+    }
+
+    /** Runs on the mic thread for every frame event; only turn boundaries hop to the main thread. */
+    private fun onHandsFreeEvent(event: TurnDetector.Event) {
+        val recognizer = dualRecognizer ?: return
+        when (event) {
+            is TurnDetector.Event.TurnStarted -> {
+                recognizer.beginTurnAudio(handsFreeCodes, event.preRoll)
+                runOnUiThread { startHandsFreeTurn() }
+            }
+            is TurnDetector.Event.Audio -> recognizer.write(event.samples)
+            is TurnDetector.Event.TurnEnded -> {
+                // Stop listening until this turn is translated and spoken, so we never hear ourselves.
+                voiceMic?.muted = true
+                recognizer.finishAudio()
+                runOnUiThread {
+                    if (isConverseActive) {
+                        updateConverseMicIndicator()
+                        updateConverseStatus("Recognizing...")
+                    }
+                }
+            }
+        }
+    }
+
+    private fun startHandsFreeTurn() {
+        if (!isConverseActive || !converseUsesHandsFree) {
+            dualRecognizer?.cancel()
+            return
+        }
+        handsFreePartials.clear()
+        updateConverseStatus("Hearing you...")
+        dualRecognizer?.startSessions()
+    }
+
+    private fun onHandsFreeTurnRecognized(candidates: List<TurnLanguageChooser.Candidate>, errors: List<Int>) {
+        if (!isConverseActive || !converseUsesHandsFree) return
+
+        if (candidates.all { it.text.isBlank() }) {
+            val unavailable = errors.any { it == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE || it == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED }
+            if (unavailable) {
+                setStatus("A conversation language isn't available to the speech recognizer. Check Settings → Google → Voice, or stay online.", isError = true)
+            }
+            val refused = errors.isNotEmpty() && errors.all {
+                it != SpeechRecognizer.ERROR_NETWORK && it != SpeechRecognizer.ERROR_NETWORK_TIMEOUT && it != SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+            }
+            if (!handsFreeVerified && refused && !unavailable) {
+                fallBackToClassicConversation("Hands-free isn't supported by this phone's recognizer (${recognitionErrorMessage(errors.first())}).")
+                return
+            }
+            handleConverseIdleNoSpeech()
+            return
+        }
+
+        handsFreeVerified = true
+        handsFreeEmptyTurns = 0
+        isConverseProcessing = true
+        updateConverseStatus("Processing speech...")
+        appScope.launch {
+            runCatching {
+                val scored = candidates.map { it.copy(textLanguageScore = textLanguageScore(it.text, it.languageCode)) }
+                val choice = TurnLanguageChooser.choose(scored, handsFreeLastSource) ?: error("No speech recognized.")
+                handsFreeLastSource = choice.candidate.languageCode
+                android.util.Log.i(
+                    "Babeltrout",
+                    "turn language: ${choice.candidate.languageCode} by ${choice.reason}; " +
+                        scored.joinToString { "${it.languageCode} conf=${it.confidence} text=${it.textLanguageScore}" },
+                )
+                processConverseTranscript(
+                    transcript = choice.candidate.text,
+                    detectedLanguageHint = "",
+                    detectedLanguageConfidence = SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_UNKNOWN,
+                    knownSourceCode = choice.candidate.languageCode,
+                    decidedBy = choice.reason,
+                )
+            }.onFailure { error ->
+                updateConverseStatus("Conversation processing failed: ${error.message}")
+            }
+            isConverseProcessing = false
+            if (isConverseActive) startConverseListening()
+        }
+    }
+
+    /** ML Kit's confidence that [text] is written in [code] (0 if it thinks it's something else). */
+    private suspend fun textLanguageScore(text: String, code: String): Float? {
+        if (text.isBlank()) return null
+        return runCatching {
+            languageIdentifier.identifyPossibleLanguages(text).await()
+                .filter { normalizeCode(it.languageTag) == code }
+                .maxOfOrNull { it.confidence } ?: 0f
+        }.getOrNull()
+    }
+
+    private fun resumeHandsFreeMic() {
+        if (!isConverseActive) return
+        handsFreeCodes = listOf(selectedConverseCodeA(), selectedConverseCodeB())
+        voiceMic?.muted = false
+        updateConverseMicIndicator()
+    }
+
+    private fun stopHandsFreeMic() {
+        voiceMic?.stop()
+        voiceMic = null
+        dualRecognizer?.destroy()
+        dualRecognizer = null
+    }
+
+    private fun fallBackToClassicConversation(reason: String) {
+        stopHandsFreeMic()
+        converseUsesHandsFree = false
+        prefs.edit().putBoolean(PREF_CONVERSE_HANDS_FREE, false).apply()
+        binding.switchConverseHandsFree.isChecked = false
+        setStatus("$reason Switched to classic conversation mode; you can turn hands-free back on to retry.", isError = true)
+        runCatching { converseSpeechRecognizer.cancel() }
+        isConverseListening = false
+        isConverseProcessing = false
+        if (isConverseActive) startConverseListening()
     }
 
     private fun stopConverseMode(message: String) {
@@ -871,6 +1087,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         converseLastPartial = ""
         pairSourceResolver.reset()
         piperSpeaker.stop()
+        stopHandsFreeMic()
         runCatching { converseSpeechRecognizer.cancel() }
         updateConverseToggleUi()
         updateConverseStatus("Conversation mic is off.")
@@ -885,7 +1102,8 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     }
 
     private fun updateConverseMicIndicator() {
-        val micIsListening = isConverseActive && isConverseListening
+        val handsFreeOpen = converseUsesHandsFree && voiceMic?.isRunning == true && voiceMic?.muted == false
+        val micIsListening = isConverseActive && (isConverseListening || handsFreeOpen)
         binding.conversationMicIndicatorLight.setBackgroundResource(
             if (micIsListening) R.drawable.bg_mic_light_on else R.drawable.bg_mic_light_off
         )
@@ -920,6 +1138,18 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             return
         }
 
+        if (converseUsesHandsFree) {
+            // A cough or door slam can open a turn with no words in it: just keep listening. But if
+            // the recognizer has never produced text from our audio, it is probably ignoring it.
+            if (!handsFreeVerified && ++handsFreeEmptyTurns >= HANDS_FREE_MAX_EMPTY_TURNS) {
+                fallBackToClassicConversation("This phone's recognizer didn't return text from app audio.")
+                return
+            }
+            updateConverseStatus("Didn't catch that. Listening...")
+            resumeHandsFreeMic()
+            return
+        }
+
         if (binding.switchConverseAutoRestart.isChecked) {
             updateConverseStatus("Idle timeout. Restarting conversation mic...")
             scheduleConverseRestart(2800L)
@@ -931,6 +1161,12 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
 
     private fun startConverseListening() {
         if (!isConverseActive || isConverseListening || isConverseProcessing || isConverseSpeaking) {
+            return
+        }
+
+        if (converseUsesHandsFree) {
+            // Hands-free: recognizers run per turn; "listen again" just means reopening our mic.
+            resumeHandsFreeMic()
             return
         }
 
@@ -958,6 +1194,8 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         transcript: String,
         detectedLanguageHint: String,
         detectedLanguageConfidence: Int,
+        knownSourceCode: String? = null,
+        decidedBy: String? = null,
     ) {
         val codeA = selectedConverseCodeA()
         val codeB = selectedConverseCodeB()
@@ -965,7 +1203,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             error("Conversation mode requires two different languages.")
         }
 
-        val sourceCode = detectSourceWithinPair(
+        val sourceCode = knownSourceCode ?: detectSourceWithinPair(
             transcript = transcript,
             codeA = codeA,
             codeB = codeB,
@@ -991,10 +1229,10 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             transliteratedCode = transliteratedCode,
         )
         speakTargetAndWait(targetText, targetCode)
-        val hintInfo = if (detectedLanguageHint == sourceCode) {
-            " | speech engine: ${labelForCode(sourceCode)}"
-        } else {
-            ""
+        val hintInfo = when {
+            decidedBy != null -> " | chosen by $decidedBy"
+            detectedLanguageHint == sourceCode -> " | speech engine: ${labelForCode(sourceCode)}"
+            else -> ""
         }
         updateConverseStatus(
             "Detected ${labelForCode(sourceCode)} -> ${labelForCode(targetCode)} (${route.joinToString(" -> ")})$hintInfo"
@@ -2850,6 +3088,8 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         const val PREF_CONVERSE_A = "converse_code_a"
         const val PREF_CONVERSE_B = "converse_code_b"
         const val PREF_CONVERSE_SEGMENTED = "converse_segmented_session"
+        const val PREF_CONVERSE_HANDS_FREE = "converse_hands_free"
+        const val HANDS_FREE_MAX_EMPTY_TURNS = 3
         const val PREF_SPEECH_RATE_PROGRESS = "speech_rate_progress"
         const val PREF_OUTPUT_SIZE_PROGRESS = "output_size_progress"
         const val PREF_VOICE_PREFIX = "voice_"

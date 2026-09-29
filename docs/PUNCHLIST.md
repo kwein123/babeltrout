@@ -26,7 +26,7 @@ Tick items off as they land (`- [x]`).
 | 16 | Phrasebook (saved phrases with audio) | Clinic / front-desk use | 4 hr | — |
 | 17 | Dependabot / Renovate | Keep Gradle and Actions current | 10 min | approve PRs |
 | 18 | Split `MainActivity` into ViewModel + services | Testability, stability | 1–2 days | — |
-| 19 | **sherpa-onnx inside the app** — ✅ voices done in 1.3; conversation mic (VAD) remains | Real conversation mode | 1 week | test |
+| 19 | **sherpa-onnx inside the app** — ✅ done in 1.3 (built-in voices + hands-free VAD conversation) | — | — | — |
 | 20 | Persian G2P (ezafe-aware) | Correct Farsi vowels in speech and pronunciation line | 1 week | review |
 | 21 | On-device Persian speech recognition (Whisper) | Better colloquial Farsi, fully offline | 1 week | test |
 | 22 | Optional enhanced translation (Gemini Nano / TranslateGemma) | Idiom and context on capable phones | 3–5 days | decide |
@@ -122,7 +122,10 @@ instrumented tests. Best done just before #19.
 
 ### 19. sherpa-onnx inside Babeltrout
 - ✅ **Done in 1.3:** Piper TTS in-app with a downloadable voice library (5 Farsi + 3 Hindi, compact or full).
+- ✅ **Done in 1.3:** hands-free conversation (Silero VAD, app-owned mic, parallel per-language recognition).
 - Still to do: add **Mana** (needs packaging for sherpa-onnx and hosting as a Babeltrout release asset).
+- Possible next: a "pause length" setting (turn-end silence is fixed at 1.2 s), and barge-in (interrupting
+  a translation by speaking).
 - Silero voice-activity detection + app-owned microphone → conversation mode with no length limit and no beeps.
 - SherpaTTS becomes optional. Survives the 2027 verification change.
 - APK grows by roughly 20 MB; voices download on demand (~60 MB each).
