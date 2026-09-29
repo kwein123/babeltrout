@@ -70,10 +70,13 @@ android {
     // Release APKs are split per CPU type: each carries only its own copy of the native ML Kit and
     // onnxruntime libraries (~47 MB for arm64 vs ~78 MB combined). Emulator (x86) ABIs are dropped.
     // Debug builds stay universal so they install on anything, including emulators.
-    val buildingRelease = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
+    // Only when assembling APKs: AGP refuses ABI splits in the same run as an App Bundle (bundleRelease).
+    val buildingReleaseApks = gradle.startParameter.taskNames.any {
+        it.contains("assemble", ignoreCase = true) && it.contains("Release", ignoreCase = true)
+    }
     splits {
         abi {
-            isEnable = buildingRelease
+            isEnable = buildingReleaseApks
             reset()
             include("arm64-v8a", "armeabi-v7a")
             isUniversalApk = false
