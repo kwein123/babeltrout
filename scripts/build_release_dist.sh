@@ -41,8 +41,8 @@ if [[ ! -f "$STORE_FILE" ]]; then
   exit 1
 fi
 
-VERSION_NAME="$(grep -E 'versionName\\s*=' "$ROOT/app/build.gradle.kts" | head -n1 | sed -E 's/.*\"([^\"]+)\".*/\\1/')"
-VERSION_CODE="$(grep -E 'versionCode\\s*=' "$ROOT/app/build.gradle.kts" | head -n1 | sed -E 's/.*=\\s*([0-9]+).*/\\1/')"
+VERSION_NAME="$(grep -E 'versionName[[:space:]]*=' "$ROOT/app/build.gradle.kts" | head -n1 | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+VERSION_CODE="$(grep -E 'versionCode[[:space:]]*=' "$ROOT/app/build.gradle.kts" | head -n1 | sed -E 's/.*=[[:space:]]*([0-9]+).*/\1/' || true)"
 if [[ -z "$VERSION_NAME" ]]; then
   VERSION_NAME="unknown"
 fi
@@ -51,7 +51,9 @@ if [[ -z "$VERSION_CODE" ]]; then
 fi
 
 cd "$ROOT"
-./gradlew :app:assembleRelease :app:bundleRelease
+# Separate runs: per-CPU APK splits and the App Bundle can't be built in one Gradle invocation.
+./gradlew :app:assembleRelease
+./gradlew :app:bundleRelease
 
 APK_DIR="$ROOT/app/build/outputs/apk/release"
 AAB_SRC="$ROOT/app/build/outputs/bundle/release/app-release.aab"
