@@ -734,6 +734,20 @@
                 </LinearLayout>
 
                 <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/switchConverseHandsFree"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/bg_status"
+                    android:checked="true"
+                    android:paddingStart="10dp"
+                    android:paddingTop="6dp"
+                    android:paddingEnd="10dp"
+                    android:paddingBottom="6dp"
+                    android:text="Hands-free mic: no beeps, no time limit (Android 13+)"
+                    android:textColor="@color/status_text" />
+
+                <com.google.android.material.switchmaterial.SwitchMaterial
                     android:id="@+id/switchConverseAutoRestart"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

@@ -37,6 +37,9 @@ capability comes from the phone's own services plus Google ML Kit.
 | `ScriptHeuristics.kt` | Script detection, Farsi/Arabic and Ukrainian/Russian disambiguation, transcript scoring, `PairSourceResolver` | ✅ |
 | `TransliterationEngine.kt` | Arabic, Persian, Cyrillic and Devanagari to Latin; Latin to each script. Persian uses a lexicon plus positional vowel rules | ✅ |
 | `SpeechText.kt` | TTS chunking and speaking timeouts | ✅ |
+| `TurnDetector.kt` | VAD flags → conversation turns (pre-roll, length cap) | ✅ |
+| `TurnLanguageChooser.kt` | Picks the language of a turn recognized in both languages | ✅ |
+| `VoiceActivityMic.kt`, `RecognizerAudioPipe.kt`, `DualTurnRecognizer.kt` | App-owned mic, audio pipes, parallel per-language recognition | manual (device-tested) |
 | `PiperVoiceCatalog.kt` | Downloadable built-in voices: URLs, sizes, pinned SHA-256 digests | ✅ |
 | `PiperVoiceStore.kt` | Download, verify, safely unpack, list and delete built-in voices | ✅ (extraction and discovery) |
 | `PiperSpeaker.kt` | Runs a Piper voice with sherpa-onnx on one worker thread, streaming audio to an `AudioTrack` | manual |
@@ -54,6 +57,30 @@ Output entries are inflated from `item_entry.xml` and `item_converse_entry.xml` 
 `LinearLayout`s. That works for dozens of entries; switch to `RecyclerView` if sessions get long.
 
 ## Conversation mode, in detail
+
+### Hands-free (default on Android 13+)
+
+```
+AudioRecord 16 kHz ─► Silero VAD (sherpa-onnx) ─► TurnDetector ─┬─► pipe ─► SpeechRecognizer locked to language A ─┐
+ (VoiceActivityMic)     speech / silence flags    pre-roll,     │                                                    ├─► TurnLanguageChooser ─► translate ─► speak
+                                                  90 s cap      └─► pipe ─► SpeechRecognizer locked to language B ─┘       (mic muted until done)
+```
+
+* `VoiceActivityMic` records continuously and runs Silero VAD on each 32 ms frame. `TurnDetector` (pure,
+  tested) prepends 0.6 s of pre-roll so first syllables aren't clipped, and ends a turn after about 1.2 s
+  of silence or 90 s of speech.
+* `DualTurnRecognizer` streams each turn through `RecognizerAudioPipe`s into two `SpeechRecognizer`s, one
+  per conversation language (`EXTRA_AUDIO_SOURCE` + `EXTRA_SEGMENTED_SESSION`). Each is locked to its
+  language: auto-detection needs seconds of speech and stuck to the first language. On a Pixel 9 Pro XL
+  both run in parallel; if a service refuses, the lane is replayed sequentially from buffered audio.
+* `TurnLanguageChooser` (pure, tested) picks the candidate: wrong-script answers lose, then recognizer
+  confidence (ignored if it proves to be a fixed placeholder, as Google's Ukrainian model's 0.9397 is),
+  then ML Kit text language ID, then marker words, then turn-taking. The log (tag `Babeltrout`) records
+  each decision (codes and scores only, never the words).
+* If the recognizer rejects app-supplied audio, the app switches to the classic mode below and turns the
+  Hands-free switch off.
+
+### Classic (Android 12 and earlier, or Hands-free off)
 
 Android's `SpeechRecognizer` is session-based: one session, one utterance, and it closes the
 microphone when it hears a pause. The app restarts it after every result, which causes the beeps and

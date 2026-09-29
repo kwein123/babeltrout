@@ -20,3 +20,4 @@
 # Voice models are large; distribute them as release assets, not in git
 *.onnx
 !fa_IR-amir-medium.onnx
+!app/src/main/assets/silero_vad.onnx
