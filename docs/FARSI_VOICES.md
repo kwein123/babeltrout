@@ -30,7 +30,7 @@ You can't judge voices from a table. Listen to all of them with the same sentenc
   but online only, through an unofficial endpoint. A candidate for an optional "online voice" mode, not a default.
 * **Meta MMS-TTS (Persian)**: covers 1,100+ languages; the license is non-commercial and the quality is below Piper's.
 
-## Installing more than one voice
+## Installing a voice
 
 1. Install SherpaTTS: [F-Droid](https://f-droid.org/packages/org.woheller69.ttsengine/) (preferred;
    updates itself) or its [GitHub releases](https://github.com/woheller69/ttsEngine/releases).
@@ -40,13 +40,15 @@ You can't judge voices from a table. Listen to all of them with the same sentenc
    **Setup → Import Voice Files**, pick both files, and finish the import inside SherpaTTS.
    (SherpaTTS's own built-in downloader can also fetch Piper voices directly from Hugging Face.)
 4. In Babeltrout, tap **Setup → Choose Voices → Farsi**. You'll see every Farsi voice that *any*
-   installed engine exposes. Pick one and it plays a sample. Your choice is remembered, and **Automatic**
-   returns to the default routing.
+   installed engine exposes (with SherpaTTS, that is one; see below). Pick one and it plays a sample.
 5. Run **Diagnose Farsi TTS**. The report now lists every Farsi voice found and which one is chosen.
 
-**If only one Farsi voice appears** even though you imported several, SherpaTTS is exposing only its
-currently active model for Persian. Switch models inside the SherpaTTS app; Babeltrout then uses
-whichever is active. This limitation is the main reason for the *in-app voice engine* on the roadmap.
+**SherpaTTS holds one voice per language.** Its source code (checked September 2026) stores each model
+in a folder named after the language code (`…/files/fasIR/`), so importing a second Farsi voice
+*replaces* the first, and Android sees a single voice called `fa`. *Choose Voices → Farsi* will therefore
+show one SherpaTTS entry, whichever Farsi model you installed last. To change voices today, import the
+other model's `.onnx` + `.onnx.json` into SherpaTTS again. Real side-by-side choice needs the in-app voice
+engine on the roadmap ([PUNCHLIST.md](PUNCHLIST.md) item 19).
 
 ## Comparing voices
 
