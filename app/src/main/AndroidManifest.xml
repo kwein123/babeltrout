@@ -11,11 +11,21 @@
         </intent>
     </queries>
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Only used to download translation models and built-in voices; both then run on-device. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Warns before downloading voices over metered (mobile) data. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Lets the setup page hand a SherpaTTS APK to the system installer. Google Play restricts
+         this permission; remove it (and the Install TTS APK button) before a Play release. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- The app still runs where speech recognition is missing; it just can't listen. -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="false"
         android:icon="@drawable/ic_babeltrout_alt_rainbow"
         android:label="@string/app_name"
         android:roundIcon="@drawable/ic_babeltrout_alt_rainbow"

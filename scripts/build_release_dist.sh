@@ -53,10 +53,12 @@ fi
 cd "$ROOT"
 ./gradlew :app:assembleRelease :app:bundleRelease
 
-APK_SRC="$ROOT/app/build/outputs/apk/release/app-release.apk"
+APK_DIR="$ROOT/app/build/outputs/apk/release"
 AAB_SRC="$ROOT/app/build/outputs/bundle/release/app-release.aab"
-if [[ ! -f "$APK_SRC" ]]; then
-  echo "Release APK not found at: $APK_SRC" >&2
+shopt -s nullglob
+APKS=("$APK_DIR"/app-*-release.apk)
+if [[ ${#APKS[@]} -eq 0 ]]; then
+  echo "No release APKs found in: $APK_DIR" >&2
   exit 1
 fi
 if [[ ! -f "$AAB_SRC" ]]; then
@@ -66,12 +68,15 @@ fi
 
 DIST_DIR="$ROOT/dist"
 mkdir -p "$DIST_DIR"
-APK_DEST="$DIST_DIR/babeltrout-v${VERSION_NAME}-c${VERSION_CODE}-release.apk"
 AAB_DEST="$DIST_DIR/babeltrout-v${VERSION_NAME}-c${VERSION_CODE}-release.aab"
-
-cp "$APK_SRC" "$APK_DEST"
 cp "$AAB_SRC" "$AAB_DEST"
 
 echo "Release artifacts ready:"
-echo "  $APK_DEST"
+for apk in "${APKS[@]}"; do
+  abi="$(basename "$apk" | sed -E 's/^app-(.*)-release\.apk$/\1/')"
+  dest="$DIST_DIR/babeltrout-v${VERSION_NAME}-c${VERSION_CODE}-${abi}.apk"
+  cp "$apk" "$dest"
+  echo "  $dest"
+done
 echo "  $AAB_DEST"
+echo "Most phones need the arm64-v8a APK; armeabi-v7a is for older 32-bit phones."
