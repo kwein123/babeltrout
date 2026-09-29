@@ -233,6 +233,27 @@
                             android:layout_weight="1"
                             android:text="Spanish" />
                     </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:orientation="horizontal">
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnHoldHi"
+                            style="@style/Babeltrout.Button.Primary"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Hindi" />
+
+                        <View
+                            android:layout_width="0dp"
+                            android:layout_height="1dp"
+                            android:layout_marginStart="8dp"
+                            android:layout_weight="1" />
+                    </LinearLayout>
                 </LinearLayout>
 
                 <TextView
@@ -398,6 +419,14 @@
                         android:layout_weight="1"
                         android:text="Import Voice Files" />
                 </LinearLayout>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnChooseVoices"
+                    style="@style/Babeltrout.Button.Secondary"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="Choose Voices (e.g. Farsi)" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnOpenTtsApp"
@@ -708,6 +737,20 @@
                     android:paddingEnd="10dp"
                     android:paddingBottom="6dp"
                     android:text="Auto-restart mic when idle (may beep)"
+                    android:textColor="@color/status_text" />
+
+                <com.google.android.material.switchmaterial.SwitchMaterial
+                    android:id="@+id/switchConverseSegmented"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:background="@drawable/bg_status"
+                    android:checked="true"
+                    android:paddingStart="10dp"
+                    android:paddingTop="6dp"
+                    android:paddingEnd="10dp"
+                    android:paddingBottom="6dp"
+                    android:text="Long-speech mode: keep listening through pauses (Android 13+)"
                     android:textColor="@color/status_text" />
 
                 <TextView

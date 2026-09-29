@@ -13,3 +13,10 @@
 /local.properties
 /keystore.properties
 *.jks
+
+# Kotlin / IDE caches
+.kotlin/
+
+# Voice models are large; distribute them as release assets, not in git
+*.onnx
+!fa_IR-amir-medium.onnx

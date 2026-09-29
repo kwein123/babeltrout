@@ -26,8 +26,8 @@ android {
         applicationId = "com.kevin.babeltrout"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -54,7 +54,13 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 shrinks the ~16 MB of dex to a fraction; ML Kit ships its own keep rules.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            // Phones only: drops the x86/x86_64 emulator copies of ML Kit's native library (~35 MB).
+            ndk {
+                abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            }
             if (keystorePropertiesFile.exists()) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -84,4 +90,6 @@ dependencies {
 
     implementation("com.google.mlkit:translate:17.0.3")
     implementation("com.google.mlkit:language-id:17.0.6")
+
+    testImplementation("junit:junit:4.13.2")
 }

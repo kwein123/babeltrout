@@ -16,21 +16,25 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.util.TypedValue
+import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.SeekBar
+import android.widget.Spinner
 import android.widget.TextView
 import androidx.activity.addCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.pm.PackageInfoCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.isVisible
 import androidx.core.view.WindowInsetsCompat
@@ -62,8 +66,6 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 
 class MainActivity : AppCompatActivity(), RecognitionListener {
 
-    private data class LanguageOption(val code: String, val label: String, val localeTag: String)
-
     private data class EntryRecord(
         val timestamp: String,
         val sourceLabel: String,
@@ -94,6 +96,8 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     private data class TtsEngineRoute(
         val tts: TextToSpeech,
         val enginePackage: String?,
+        /** Voice the user pinned in "Choose Voices", or null for automatic selection. */
+        val pinnedVoiceName: String? = null,
     )
 
     private enum class UiPage {
@@ -128,32 +132,17 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     private val preferOfflineRecognition = false
     private var lastKnownDefaultTtsEngine = ""
 
-    private val languageOptions = listOf(
-        LanguageOption("uk", "Ukrainian", "uk-UA"),
-        LanguageOption("ru", "Russian", "ru-RU"),
-        LanguageOption("fa", "Farsi", "fa-IR"),
-        LanguageOption("ar", "Arabic", "ar-SA"),
-        LanguageOption("fr", "French", "fr-FR"),
-        LanguageOption("es", "Spanish", "es-ES"),
-        LanguageOption("en", "English", "en-US"),
-    )
+    private val languageOptions = Languages.all
 
-    private val supportedCodes = languageOptions.map { it.code }.toSet()
-    private val requiredModelCodes = languageOptions.map { it.code }.toSet()
-
-    private val requiredPairs = buildList {
-        languageOptions
-            .map { it.code }
-            .filter { it != "en" }
-            .forEach { code ->
-                add("en" to code)
-                add(code to "en")
-            }
-    }
-
-    private val transliterationTargets = setOf("fa", "ar")
+    private val supportedCodes = Languages.codes
+    private val requiredModelCodes = Languages.codes
 
     private val modelDownloadConditions = DownloadConditions.Builder().build()
+
+    /** Translator pairs whose models are confirmed on-device, so we skip the per-call download check. */
+    private val readyTranslatorPairs = mutableSetOf<String>()
+
+    private val pairSourceResolver = PairSourceResolver()
 
     private val entries = mutableListOf<EntryRecord>()
 
@@ -174,8 +163,10 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     private var isConverseProcessing = false
     private var isConverseSpeaking = false
     private var converseRestartPending = false
-    private var lastConverseSourceCode: String? = null
-    private var converseTiePrefersCodeA = true
+    /** Latest partial transcript, used to salvage speech when the recognizer errors or times out. */
+    private var converseLastPartial = ""
+    /** Segments collected during an Android 13+ segmented session, joined when the session ends. */
+    private val converseSegments = mutableListOf<String>()
     private var currentPage = UiPage.MAIN
     private var downloadsSummaryText = "Downloads not checked yet."
     private var voicesSummaryText = "Voices not checked yet."
@@ -223,7 +214,6 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             return@registerForActivityResult
         }
 
-        grantReadAccess(uri)
         startTtsApkInstall(uri)
     }
 
@@ -246,8 +236,6 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             setStatus("Voice file selection cancelled.")
             return@registerForActivityResult
         }
-
-        uris.forEach { grantReadAccess(it) }
 
         val fileNames = uris.map { displayNameForUri(it).lowercase(Locale.US) }
         val hasOnnx = fileNames.any { it.endsWith(".onnx") }
@@ -309,6 +297,13 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
                 return
             }
 
+            // Long utterances often end in a timeout or client error. Don't throw away what was heard.
+            val salvaged = takeBufferedConverseSpeech(includePartial = true)
+            if (salvaged.isNotBlank()) {
+                handleConverseTranscript(salvaged, "", SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_UNKNOWN)
+                return
+            }
+
             if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
                 handleConverseIdleNoSpeech()
                 return
@@ -320,19 +315,20 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         }
 
         override fun onResults(results: Bundle?) {
-            if (!isConverseActive) {
+            // A turn already handed off (e.g. by onEndOfSegmentedSession) must not be processed twice.
+            if (!isConverseActive || isConverseProcessing) {
                 return
             }
 
             isConverseListening = false
             updateConverseMicIndicator()
-            val codeA = selectedConverseCodeA()
-            val codeB = selectedConverseCodeB()
-            val transcripts = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                ?.map { it.trim() }
-                ?.filter { it.isNotBlank() }
-                .orEmpty()
-            val transcript = pickBestTranscriptForPair(transcripts, codeA, codeB)
+            val best = ScriptHeuristics.pickBestTranscriptForPair(
+                extractTranscripts(results),
+                selectedConverseCodeA(),
+                selectedConverseCodeB(),
+            )
+            val buffered = takeBufferedConverseSpeech(includePartial = false)
+            val transcript = listOf(buffered, best).filter { it.isNotBlank() }.joinToString(" ")
             val detectedLanguageHint = normalizeCode(results?.getString(SpeechRecognizer.DETECTED_LANGUAGE))
             val detectedLanguageConfidence = results?.getInt(
                 SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL,
@@ -344,44 +340,85 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
                 return
             }
 
-            isConverseProcessing = true
-            updateConverseStatus("Processing speech...")
-
-            appScope.launch {
-                runCatching {
-                    processConverseTranscript(transcript, detectedLanguageHint, detectedLanguageConfidence)
-                }.onFailure { error ->
-                    updateConverseStatus("Conversation processing failed: ${error.message}")
-                }
-
-                isConverseProcessing = false
-                if (isConverseActive) {
-                    startConverseListening()
-                }
-            }
+            handleConverseTranscript(transcript, detectedLanguageHint, detectedLanguageConfidence)
         }
 
-        override fun onPartialResults(partialResults: Bundle?) = Unit
+        override fun onPartialResults(partialResults: Bundle?) {
+            if (!isConverseActive) {
+                return
+            }
+            val partial = extractTranscripts(partialResults).firstOrNull() ?: return
+            converseLastPartial = partial
+            updateConverseStatus("Hearing: ${(converseSegments + partial).joinToString(" ")}")
+        }
+
+        // Android 13+ segmented sessions: the recognizer keeps the mic open across pauses and
+        // delivers each chunk here, instead of ending the whole session at the first pause.
+        override fun onSegmentResults(segmentResults: Bundle) {
+            if (!isConverseActive) {
+                return
+            }
+            val segment = ScriptHeuristics.pickBestTranscriptForPair(
+                extractTranscripts(segmentResults),
+                selectedConverseCodeA(),
+                selectedConverseCodeB(),
+            )
+            if (segment.isNotBlank()) {
+                converseSegments += segment
+            }
+            converseLastPartial = ""
+            updateConverseStatus("Hearing: ${converseSegments.joinToString(" ")}")
+        }
+
+        override fun onEndOfSegmentedSession() {
+            if (!isConverseActive || isConverseProcessing) {
+                return
+            }
+            isConverseListening = false
+            updateConverseMicIndicator()
+            val transcript = takeBufferedConverseSpeech(includePartial = true)
+            if (transcript.isBlank()) {
+                handleConverseIdleNoSpeech()
+                return
+            }
+            handleConverseTranscript(transcript, "", SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_UNKNOWN)
+        }
 
         override fun onEvent(eventType: Int, params: Bundle?) = Unit
     }
 
-    private fun pickBestTranscriptForPair(candidates: List<String>, codeA: String, codeB: String): String {
-        if (candidates.isEmpty()) {
-            return ""
-        }
+    private fun extractTranscripts(results: Bundle?): List<String> =
+        results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() }
+            .orEmpty()
 
-        val includesCyrillicLang = codeA in setOf("uk", "ru") || codeB in setOf("uk", "ru")
-        if (includesCyrillicLang) {
-            candidates.firstOrNull { containsCyrillic(it) }?.let { return it }
+    private fun takeBufferedConverseSpeech(includePartial: Boolean): String {
+        val pieces = converseSegments.toMutableList()
+        if (includePartial && converseLastPartial.isNotBlank()) {
+            pieces += converseLastPartial
         }
+        converseSegments.clear()
+        converseLastPartial = ""
+        return pieces.joinToString(" ").trim()
+    }
 
-        val includesArabicLang = codeA in setOf("fa", "ar") || codeB in setOf("fa", "ar")
-        if (includesArabicLang) {
-            candidates.firstOrNull { containsArabicScript(it) }?.let { return it }
+    private fun handleConverseTranscript(transcript: String, detectedLanguageHint: String, detectedLanguageConfidence: Int) {
+        isConverseProcessing = true
+        updateConverseStatus("Processing speech...")
+
+        appScope.launch {
+            runCatching {
+                processConverseTranscript(transcript, detectedLanguageHint, detectedLanguageConfidence)
+            }.onFailure { error ->
+                updateConverseStatus("Conversation processing failed: ${error.message}")
+            }
+
+            isConverseProcessing = false
+            if (isConverseActive) {
+                startConverseListening()
+            }
         }
-
-        return candidates.first()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -434,20 +471,30 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     }
 
     private fun setupTargetSpinner() {
+        bindLanguageSpinner(binding.targetLanguageSpinner, PREF_TARGET_CODE, "uk")
+    }
+
+    /** Fills [spinner] with the app languages and remembers the choice across launches. */
+    private fun bindLanguageSpinner(spinner: Spinner, prefKey: String, defaultCode: String) {
         val labels = languageOptions.map { it.label }
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
-        binding.targetLanguageSpinner.adapter = adapter
-        binding.targetLanguageSpinner.setSelection(languageOptions.indexOfFirst { it.code == "uk" }.coerceAtLeast(0))
+        spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
+        val saved = prefs.getString(prefKey, defaultCode) ?: defaultCode
+        val index = languageOptions.indexOfFirst { it.code == saved }
+            .takeIf { it >= 0 }
+            ?: languageOptions.indexOfFirst { it.code == defaultCode }.coerceAtLeast(0)
+        spinner.setSelection(index)
+        spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                languageOptions.getOrNull(position)?.let { prefs.edit().putString(prefKey, it.code).apply() }
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+        }
     }
 
     private fun setupConversePage() {
-        val labels = languageOptions.map { it.label }
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
-        binding.converseLangASpinner.adapter = adapter
-        binding.converseLangBSpinner.adapter = adapter
-
-        binding.converseLangASpinner.setSelection(languageOptions.indexOfFirst { it.code == "en" }.coerceAtLeast(0))
-        binding.converseLangBSpinner.setSelection(languageOptions.indexOfFirst { it.code == "fa" }.coerceAtLeast(0))
+        bindLanguageSpinner(binding.converseLangASpinner, PREF_CONVERSE_A, "en")
+        bindLanguageSpinner(binding.converseLangBSpinner, PREF_CONVERSE_B, "fa")
 
         binding.btnOpenConversePage.setOnClickListener {
             showPage(UiPage.CONVERSE)
@@ -473,6 +520,16 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             setStatus("Conversation idle auto-restart is $modeText.")
         }
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            binding.switchConverseSegmented.isChecked = prefs.getBoolean(PREF_CONVERSE_SEGMENTED, true)
+            binding.switchConverseSegmented.setOnCheckedChangeListener { _, isChecked ->
+                prefs.edit().putBoolean(PREF_CONVERSE_SEGMENTED, isChecked).apply()
+                setStatus(if (isChecked) "Long-speech mode on (applies to the next turn)." else "Long-speech mode off.")
+            }
+        } else {
+            binding.switchConverseSegmented.isVisible = false
+        }
+
         binding.btnClearConverse.setOnClickListener {
             binding.converseOutputContainer.removeAllViews()
             setStatus("Conversation output cleared.")
@@ -484,6 +541,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
 
     private fun setupSpeechRateControl() {
         syncingSpeechRateControls = true
+        binding.speechRateSeek.progress = prefs.getInt(PREF_SPEECH_RATE_PROGRESS, binding.speechRateSeek.progress)
         binding.supportSpeechRateSeek.progress = binding.speechRateSeek.progress
         syncingSpeechRateControls = false
         updateSpeechRateLabel()
@@ -495,6 +553,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
                     binding.supportSpeechRateSeek.progress = progress
                     syncingSpeechRateControls = false
                 }
+                prefs.edit().putInt(PREF_SPEECH_RATE_PROGRESS, progress).apply()
                 updateSpeechRateLabel()
             }
 
@@ -519,6 +578,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
 
     private fun setupOutputSizeControl() {
         syncingOutputSizeControls = true
+        binding.outputSizeSeek.progress = prefs.getInt(PREF_OUTPUT_SIZE_PROGRESS, binding.outputSizeSeek.progress)
         binding.supportOutputSizeSeek.progress = binding.outputSizeSeek.progress
         syncingOutputSizeControls = false
         updateOutputSizeLabel()
@@ -530,6 +590,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
                     binding.supportOutputSizeSeek.progress = progress
                     syncingOutputSizeControls = false
                 }
+                prefs.edit().putInt(PREF_OUTPUT_SIZE_PROGRESS, progress).apply()
                 updateOutputSizeLabel()
                 applyOutputSizeToAllEntries()
             }
@@ -563,6 +624,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         bindHoldButton(binding.btnHoldAr, "ar")
         bindHoldButton(binding.btnHoldFr, "fr")
         bindHoldButton(binding.btnHoldEs, "es")
+        bindHoldButton(binding.btnHoldHi, "hi")
     }
 
     private fun bindHoldButton(button: Button, sourceCode: String?) {
@@ -711,12 +773,22 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOfflineRecognition)
-        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+        intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
         intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
-        intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 15000L)
-        intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
-        intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
         intent.putExtra("android.speech.extra.DICTATION_MODE", true)
+        if (useSegmentedConverseSession()) {
+            // Keep one session open across natural pauses; results arrive per segment and the
+            // session ends only after a longer silence (end of the speaker's turn).
+            intent.putExtra(
+                RecognizerIntent.EXTRA_SEGMENTED_SESSION,
+                RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS
+            )
+            intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2500L)
+        } else {
+            intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 15000L)
+            intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1800L)
+            intent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1200L)
+        }
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "und")
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "und")
         intent.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
@@ -734,6 +806,10 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         )
         return intent
     }
+
+    private fun useSegmentedConverseSession(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            prefs.getBoolean(PREF_CONVERSE_SEGMENTED, true)
 
     private fun startConverseMode() {
         if (isConverseActive) {
@@ -760,8 +836,9 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
 
         isConverseActive = true
         converseRestartPending = false
-        lastConverseSourceCode = null
-        converseTiePrefersCodeA = true
+        converseSegments.clear()
+        converseLastPartial = ""
+        pairSourceResolver.reset()
         updateConverseToggleUi()
         updateConverseStatus("Conversation mic is starting...")
         setStatus("Conversation mode started: ${labelForCode(codeA)} <-> ${labelForCode(codeB)}")
@@ -783,7 +860,9 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         isConverseProcessing = false
         isConverseSpeaking = false
         converseRestartPending = false
-        lastConverseSourceCode = null
+        converseSegments.clear()
+        converseLastPartial = ""
+        pairSourceResolver.reset()
         runCatching { converseSpeechRecognizer.cancel() }
         updateConverseToggleUi()
         updateConverseStatus("Conversation mic is off.")
@@ -885,7 +964,6 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             detectedLanguageHint = detectedLanguageHint,
             detectedLanguageConfidence = detectedLanguageConfidence,
         )
-        lastConverseSourceCode = sourceCode
         val targetCode = if (sourceCode == codeA) codeB else codeA
         val sourceTextForDisplay = normalizeConverseSourceText(transcript, sourceCode)
         val (targetText, route) = translateText(sourceTextForDisplay, sourceCode, targetCode)
@@ -922,137 +1000,29 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         detectedLanguageHint: String,
         detectedLanguageConfidence: Int,
     ): String {
-        val normalizedHint = normalizeCode(detectedLanguageHint)
-        if (normalizedHint == codeA || normalizedHint == codeB) {
-            val hintMatchesScript = when {
-                containsCyrillic(transcript) -> normalizedHint == "uk" || normalizedHint == "ru"
-                containsArabicScript(transcript) -> normalizedHint == "fa" || normalizedHint == "ar"
-                else -> false
-            }
-            val hintConfident = detectedLanguageConfidence >= SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_CONFIDENT
-            if (hintConfident || hintMatchesScript) {
-                return normalizedHint
-            }
-        }
+        val hintConfident = detectedLanguageConfidence >= SpeechRecognizer.LANGUAGE_DETECTION_CONFIDENCE_LEVEL_CONFIDENT
+        pairSourceResolver.fromRecognizerHint(transcript, codeA, codeB, detectedLanguageHint, hintConfident)
+            ?.let { return it }
 
-        val detected = detectSourceLanguage(transcript)
-        if (detected == codeA || detected == codeB) {
-            return detected
-        }
-
-        if (containsArabicScript(transcript)) {
-            if (setOf(codeA, codeB) == setOf("fa", "ar")) {
-                return if (looksFarsi(transcript)) "fa" else "ar"
-            }
-            if (codeA == "fa" || codeB == "fa") {
-                return "fa"
-            }
-            if (codeA == "ar" || codeB == "ar") {
-                return "ar"
-            }
-        }
-
-        if (containsCyrillic(transcript)) {
-            if (setOf(codeA, codeB) == setOf("uk", "ru")) {
-                return if (looksUkrainian(transcript)) "uk" else "ru"
-            }
-            if (codeA == "uk" || codeB == "uk") {
-                return "uk"
-            }
-            if (codeA == "ru" || codeB == "ru") {
-                return "ru"
-            }
-        }
-
-        val scoreA = scoreLanguageForTranscript(transcript, codeA)
-        val scoreB = scoreLanguageForTranscript(transcript, codeB)
-        if (scoreA == scoreB) {
-            if (normalizedHint == codeA || normalizedHint == codeB) {
-                return normalizedHint
-            }
-
-            if (lastConverseSourceCode == codeA) {
-                return codeB
-            }
-            if (lastConverseSourceCode == codeB) {
-                return codeA
-            }
-
-            val chosen = if (converseTiePrefersCodeA) codeA else codeB
-            converseTiePrefersCodeA = !converseTiePrefersCodeA
-            return chosen
-        }
-        return if (scoreB > scoreA) codeB else codeA
-    }
-
-    private fun scoreLanguageForTranscript(transcript: String, code: String): Int {
-        return when (normalizeCode(code)) {
-            "fa" -> when {
-                looksFarsi(transcript) -> 3
-                containsArabicScript(transcript) -> 1
-                else -> 0
-            }
-
-            "ar" -> when {
-                containsArabicScript(transcript) && !looksFarsi(transcript) -> 3
-                containsArabicScript(transcript) -> 1
-                else -> 0
-            }
-
-            "uk" -> when {
-                looksUkrainian(transcript) -> 3
-                containsCyrillic(transcript) -> 1
-                else -> 0
-            }
-
-            "ru" -> when {
-                containsCyrillic(transcript) && !looksUkrainian(transcript) -> 3
-                containsCyrillic(transcript) -> 1
-                else -> 0
-            }
-
-            "fr" -> if (looksFrench(transcript.lowercase(Locale.US))) 2 else 0
-            "es" -> if (looksSpanish(transcript.lowercase(Locale.US))) 2 else 0
-            "en" -> {
-                val lowered = " ${transcript.lowercase(Locale.US)} "
-                val markers = listOf(
-                    " the ", " and ", " is ", " are ", " to ", " of ",
-                    " hello ", " hi ", " yes ", " no ", " please ", " thanks ",
-                    " thank ", " good ", " morning ", " evening ", " okay ", " ok ",
-                    " how ", " what ", " where ", " why ", " who ", " when "
-                )
-                if (markers.any { lowered.contains(it) }) 2 else 0
-            }
-
-            else -> 0
-        }
+        val mlDetected = detectSourceLanguage(transcript)
+        return pairSourceResolver.resolve(transcript, codeA, codeB, detectedLanguageHint, mlDetected)
     }
 
     private fun transliterateTextToScript(text: String, textCode: String, targetScriptCode: String): String {
-        val normalizedTextCode = normalizeCode(textCode)
-        val latin = when (normalizedTextCode) {
-            "fa", "ar" -> TransliterationEngine.arabicScriptToLatin(text)
-            "uk", "ru" -> TransliterationEngine.cyrillicToLatin(text, normalizedTextCode)
-            else -> text
-        }
-
-        return TransliterationEngine.latinToScript(latin, normalizeCode(targetScriptCode)).ifBlank { text }
+        val latin = TransliterationEngine.toLatin(text, textCode)
+        return TransliterationEngine.latinToScript(latin, targetScriptCode).ifBlank { text }
     }
 
     private fun normalizeConverseSourceText(transcript: String, sourceCode: String): String {
         val normalizedSourceCode = normalizeCode(sourceCode)
-        val sourceUsesArabicScript = normalizedSourceCode == "fa" || normalizedSourceCode == "ar"
-        val sourceUsesCyrillic = normalizedSourceCode == "uk" || normalizedSourceCode == "ru"
-        val hasSourceScript = when {
-            sourceUsesArabicScript -> containsArabicScript(transcript)
-            sourceUsesCyrillic -> containsCyrillic(transcript)
-            else -> true
-        }
+        val sourceScript = Languages.script(normalizedSourceCode)
+        val hasSourceScript = sourceScript == Script.LATIN || ScriptHeuristics.hasScript(transcript, sourceScript)
 
         if (hasSourceScript || !transcript.any { it.isLetter() }) {
             return transcript
         }
 
+        // The recognizer sometimes returns a romanized transcript for a non-Latin language.
         val converted = TransliterationEngine.latinToScript(transcript, normalizedSourceCode)
         return if (converted.isBlank()) transcript else converted
     }
@@ -1065,18 +1035,18 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     ): Pair<String, String> {
         val normalizedSourceCode = normalizeCode(sourceCode)
         val normalizedTargetCode = normalizeCode(targetCode)
-        val nonLatinSourceCodes = setOf("fa", "ar", "uk", "ru")
-        val latinTargetCodes = setOf("en", "fr", "es")
+        val sourceScript = Languages.script(normalizedSourceCode)
+        val targetScript = Languages.script(normalizedTargetCode)
 
-        // For non-Latin source languages translated into a Latin-script target language,
-        // show pronunciation as source text transliterated into Latin characters.
-        if (normalizedSourceCode in nonLatinSourceCodes && normalizedTargetCode in latinTargetCodes) {
-            val latin = when (normalizedSourceCode) {
-                "fa", "ar" -> TransliterationEngine.arabicScriptToLatin(sourceText)
-                "uk", "ru" -> TransliterationEngine.cyrillicToLatin(sourceText, normalizedSourceCode)
-                else -> sourceText
-            }.ifBlank { sourceText }
+        // Non-Latin source into a Latin-script target: show how the speaker's words sound, in Latin letters.
+        if (sourceScript != Script.LATIN && targetScript == Script.LATIN) {
+            val latin = TransliterationEngine.toLatin(sourceText, normalizedSourceCode).ifBlank { sourceText }
             return latin to normalizedTargetCode
+        }
+
+        // Same script on both sides (Farsi/Arabic, Ukrainian/Russian): a Latin reading is more useful.
+        if (sourceScript == targetScript) {
+            return TransliterationEngine.toLatin(targetText, normalizedTargetCode) to "en"
         }
 
         val transliterated = transliterateTextToScript(targetText, normalizedTargetCode, normalizedSourceCode)
@@ -1099,7 +1069,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
 
         val sourceLabel = labelForCode(sourceCode)
         val targetLabel = labelForCode(targetCode)
-        val translitLabel = labelForCode(transliteratedCode)
+        val translitLabel = if (Languages.script(transliteratedCode) == Script.LATIN) "Latin" else labelForCode(transliteratedCode)
 
         timeLine.text = LocalTime.now().withNano(0).toString()
         sourceLine.text = "$sourceLabel: $sourceText"
@@ -1146,6 +1116,10 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
 
         binding.btnVoiceSettings.setOnClickListener {
             openVoiceSettings()
+        }
+
+        binding.btnChooseVoices.setOnClickListener {
+            showVoiceLanguagePicker()
         }
 
         binding.btnInstallTtsApk.setOnClickListener {
@@ -1305,8 +1279,34 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         return newTts
     }
 
+    /** TTS instance bound to [enginePackage], reusing the default instance when it is the same engine. */
+    private suspend fun ttsForEngine(enginePackage: String): TextToSpeech? {
+        val defaultTts = if (ttsReady) textToSpeech else null
+        if (enginePackage == currentDefaultTtsEngine() && defaultTts != null) {
+            return defaultTts
+        }
+        return getOrCreateNamedEngineTts(enginePackage)
+    }
+
+    private fun pinnedVoiceFor(code: String): Pair<String, String>? {
+        val stored = prefs.getString(PREF_VOICE_PREFIX + normalizeCode(code), null) ?: return null
+        val engine = stored.substringBefore(PINNED_VOICE_SEPARATOR, "")
+        val voice = stored.substringAfter(PINNED_VOICE_SEPARATOR, "")
+        return if (engine.isBlank() || voice.isBlank()) null else engine to voice
+    }
+
     private suspend fun resolveRouteForOutputCode(code: String): TtsEngineRoute? {
         val normalizedCode = normalizeCode(code)
+
+        // 1. A voice the user explicitly chose in "Choose Voices" wins, if it is still installed.
+        pinnedVoiceFor(normalizedCode)?.let { (enginePackage, voiceName) ->
+            val tts = ttsForEngine(enginePackage)
+            if (tts != null && runCatching { tts.voices }.getOrNull().orEmpty().any { it.name == voiceName }) {
+                return TtsEngineRoute(tts, enginePackage, voiceName)
+            }
+        }
+
+        // 2. Automatic routing: Farsi -> SherpaTTS, everything else -> Google TTS, then the default engine.
         val defaultEngine = currentDefaultTtsEngine().ifBlank { null }
         val defaultTts = if (ttsReady) textToSpeech else null
 
@@ -1337,6 +1337,82 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         }
 
         return preferredRoute
+    }
+
+    private data class VoiceChoice(val enginePackage: String, val engineLabel: String, val voice: Voice)
+
+    private fun describeVoice(voice: Voice): String {
+        val where = if (voice.isNetworkConnectionRequired) "online" else "offline"
+        return "${voice.name} ($where)"
+    }
+
+    /** Every installed voice for [code], across all TTS engines on the device. */
+    private suspend fun collectVoices(code: String): List<VoiceChoice> {
+        val normalized = normalizeCode(code)
+        val engines = textToSpeech?.engines.orEmpty()
+        val choices = mutableListOf<VoiceChoice>()
+        for (engine in engines) {
+            val tts = ttsForEngine(engine.name) ?: continue
+            runCatching { tts.voices }.getOrNull().orEmpty()
+                .filter { normalizeCode(it.locale.toLanguageTag()) == normalized }
+                .filterNot { it.features.orEmpty().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) }
+                .sortedWith(compareBy({ it.isNetworkConnectionRequired }, { it.name }))
+                .forEach { choices += VoiceChoice(engine.name, engine.label.toString(), it) }
+        }
+        return choices
+    }
+
+    private fun showVoiceLanguagePicker() {
+        val labels = languageOptions.map { option ->
+            val pinned = pinnedVoiceFor(option.code)
+            "${option.label}: ${pinned?.second ?: "automatic"}"
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Choose a voice for...")
+            .setItems(labels.toTypedArray()) { _, which -> showVoicesForLanguage(languageOptions[which]) }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showVoicesForLanguage(option: LanguageOption) {
+        setStatus("Looking for ${option.label} voices...")
+        appScope.launch {
+            val choices = collectVoices(option.code)
+            if (choices.isEmpty()) {
+                setStatus(
+                    "No ${option.label} voices found. Install one via Voice Settings" +
+                        if (option.code == "fa") " or import a Piper voice into SherpaTTS." else ".",
+                    isError = true
+                )
+                return@launch
+            }
+
+            val pinned = pinnedVoiceFor(option.code)
+            val labels = listOf("Automatic (Babeltrout picks)") +
+                choices.map { "${it.engineLabel}: ${describeVoice(it.voice)}" }
+            val checked = choices.indexOfFirst { it.enginePackage == pinned?.first && it.voice.name == pinned.second } + 1
+
+            AlertDialog.Builder(this@MainActivity)
+                .setTitle("${option.label} voice (${choices.size} found)")
+                .setSingleChoiceItems(labels.toTypedArray(), checked) { dialog, which ->
+                    val key = PREF_VOICE_PREFIX + option.code
+                    if (which == 0) {
+                        prefs.edit().remove(key).apply()
+                        setStatus("${option.label} voice: automatic.")
+                    } else {
+                        val choice = choices[which - 1]
+                        prefs.edit()
+                            .putString(key, choice.enginePackage + PINNED_VOICE_SEPARATOR + choice.voice.name)
+                            .apply()
+                        setStatus("${option.label} voice: ${choice.voice.name} (${choice.engineLabel}). Playing sample...")
+                    }
+                    dialog.dismiss()
+                    speakTarget(option.sampleText, option.code)
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+            setStatus("Found ${choices.size} ${option.label} voice(s).")
+        }
     }
 
     private fun openSherpaTtsApp() {
@@ -1390,12 +1466,6 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             .onFailure { error ->
                 setStatus("Unable to share voice files: ${error.message}", isError = true)
             }
-    }
-
-    private fun grantReadAccess(uri: Uri) {
-        runCatching {
-            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
     }
 
     private fun displayNameForUri(uri: Uri): String {
@@ -1507,11 +1577,11 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             } else {
                 if (!sherpaProbe.faLanguageAvailable) {
                     issues += "SherpaTTS does not currently expose a Farsi voice."
-                    fixes += "Tap Import Voice Files and select both fa_IR-amir-medium.onnx and fa_IR-amir-medium.onnx.json, then enable that voice in SherpaTTS."
+                    fixes += "Tap Import Voice Files and select a Piper Farsi voice (.onnx and .onnx.json, e.g. fa_IR-amir-medium), then enable that voice in SherpaTTS."
                 }
                 if (sherpaProbe.faLanguageAvailable && sherpaProbe.faVoiceCount == 0) {
                     issues += "SherpaTTS shows Farsi language support but no Farsi voice entries."
-                    fixes += "Inside SherpaTTS, select fa_IR-amir-medium as the active/default voice."
+                    fixes += "Inside SherpaTTS, select a Farsi model as the active voice."
                 }
                 if (sherpaProbe.faLanguageAvailable && !sherpaProbe.speakOk) {
                     issues += "SherpaTTS failed the Farsi speak callback test."
@@ -1519,6 +1589,13 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
                 }
             }
         }
+
+        val allFarsiVoices = collectVoices("fa")
+        lines += ""
+        lines += "Farsi voices across all engines: ${allFarsiVoices.size}"
+        allFarsiVoices.forEach { lines += "- ${it.engineLabel}: ${describeVoice(it.voice)}" }
+        val pinnedFarsi = pinnedVoiceFor("fa")
+        lines += "Chosen Farsi voice: ${pinnedFarsi?.second ?: "automatic"}"
 
         lines += ""
         if (issues.isEmpty()) {
@@ -1703,7 +1780,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     private fun installedPackageVersion(packageName: String): String? {
         return runCatching {
             val packageInfo = packageManager.getPackageInfo(packageName, 0)
-            packageInfo.versionName ?: packageInfo.longVersionCode.toString()
+            packageInfo.versionName ?: PackageInfoCompat.getLongVersionCode(packageInfo).toString()
         }.getOrNull()
     }
 
@@ -1760,14 +1837,16 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
 
         appScope.launch {
             val failures = mutableListOf<String>()
+            // ML Kit stores one model per language (each translates to/from English), so download
+            // each language once rather than checking every en<->xx pair.
+            val toDownload = requiredModelCodes.filter { it != "en" }.sorted()
 
-            for ((index, pair) in requiredPairs.withIndex()) {
-                val (source, target) = pair
-                setStatus("Installing assets ${index + 1}/${requiredPairs.size}: ${source}->${target}")
+            for ((index, code) in toDownload.withIndex()) {
+                setStatus("Installing translation models ${index + 1}/${toDownload.size}: ${labelForCode(code)}")
                 runCatching {
-                    ensurePairModel(source, target)
+                    ensureLanguageModel(code)
                 }.onFailure { error ->
-                    failures.add("${source}->${target}: ${error.message}")
+                    failures.add("${labelForCode(code)}: ${error.message}")
                 }
             }
 
@@ -1839,59 +1918,64 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         }
     }
 
-    private suspend fun ensurePairModel(sourceCode: String, targetCode: String) {
+    private suspend fun ensureLanguageModel(code: String) {
+        val language = TranslateLanguage.fromLanguageTag(code)
+            ?: error("Translation language not supported: $code")
+        val model = TranslateRemoteModel.Builder(language).build()
         withContext(Dispatchers.IO) {
-            val translator = getTranslator(sourceCode, targetCode)
-            translator.downloadModelIfNeeded(modelDownloadConditions).await()
+            remoteModelManager.download(model, modelDownloadConditions).await()
         }
     }
 
+    /**
+     * ML Kit translates every non-English pair by pivoting through English internally, so a
+     * single call covers all routes. The route list is informational (shown in the status line).
+     */
     private suspend fun translateText(sourceText: String, sourceCode: String, targetCode: String): Pair<String, List<String>> {
         if (sourceCode == targetCode) {
             return sourceText to emptyList()
         }
 
-        if (sourceCode == "en" || targetCode == "en") {
-            val translated = translateDirect(sourceText, sourceCode, targetCode)
-            return translated to listOf("$sourceCode->$targetCode")
+        val translated = translateDirect(sourceText, sourceCode, targetCode)
+        val route = if (sourceCode == "en" || targetCode == "en") {
+            listOf("$sourceCode->$targetCode")
+        } else {
+            listOf("$sourceCode->en", "en->$targetCode")
         }
-
-        // Prefer direct translation for non-English pairs, but fall back to English pivot when direct fails.
-        val directAttempt = runCatching { translateDirect(sourceText, sourceCode, targetCode) }
-        if (directAttempt.isSuccess) {
-            return directAttempt.getOrThrow() to listOf("$sourceCode->$targetCode")
-        }
-
-        val englishText = translateDirect(sourceText, sourceCode, "en")
-        val targetText = translateDirect(englishText, "en", targetCode)
-        return targetText to listOf("$sourceCode->en", "en->$targetCode")
+        return translated to route
     }
 
     private suspend fun translateDirect(sourceText: String, sourceCode: String, targetCode: String): String {
         return withContext(Dispatchers.IO) {
             val translator = getTranslator(sourceCode, targetCode)
-            translator.downloadModelIfNeeded(modelDownloadConditions).await()
+            val key = "$sourceCode->$targetCode"
+            if (key !in readyTranslatorPairs) {
+                translator.downloadModelIfNeeded(modelDownloadConditions).await()
+                synchronized(readyTranslatorPairs) { readyTranslatorPairs += key }
+            }
             translator.translate(sourceText).await()
         }
     }
 
     private fun getTranslator(sourceCode: String, targetCode: String): Translator {
         val key = "$sourceCode->$targetCode"
-        translatorCache[key]?.let { return it }
+        synchronized(translatorCache) {
+            translatorCache[key]?.let { return it }
 
-        val sourceMl = TranslateLanguage.fromLanguageTag(sourceCode)
-            ?: error("Translation language not supported: $sourceCode")
-        val targetMl = TranslateLanguage.fromLanguageTag(targetCode)
-            ?: error("Translation language not supported: $targetCode")
+            val sourceMl = TranslateLanguage.fromLanguageTag(sourceCode)
+                ?: error("Translation language not supported: $sourceCode")
+            val targetMl = TranslateLanguage.fromLanguageTag(targetCode)
+                ?: error("Translation language not supported: $targetCode")
 
-        val options = TranslatorOptions.Builder()
-            .setSourceLanguage(sourceMl)
-            .setTargetLanguage(targetMl)
-            .build()
+            val options = TranslatorOptions.Builder()
+                .setSourceLanguage(sourceMl)
+                .setTargetLanguage(targetMl)
+                .build()
 
-        val translator = Translation.getClient(options)
-        translatorCache[key] = translator
-        return translator
+            val translator = Translation.getClient(options)
+            translatorCache[key] = translator
+            return translator
+        }
     }
 
     private suspend fun detectSourceLanguage(transcript: String): String {
@@ -1903,40 +1987,32 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         if (normalized in supportedCodes) {
             return normalized
         }
-
-        if (containsArabicScript(transcript)) {
-            return if (looksFarsi(transcript)) "fa" else "ar"
-        }
-
-        if (containsCyrillic(transcript)) {
-            return if (looksUkrainian(transcript)) "uk" else "ru"
-        }
-
-        val lowered = transcript.lowercase(Locale.US)
-        return when {
-            looksSpanish(lowered) -> "es"
-            looksFrench(lowered) -> "fr"
-            else -> "en"
-        }
+        return ScriptHeuristics.guessFromScript(transcript)
     }
 
     private fun buildTransliteration(targetText: String, targetCode: String, sourceCode: String): TransliterationResult {
-        if (targetCode !in transliterationTargets) {
-            return TransliterationResult(false, "", "", "", "")
+        val none = TransliterationResult(false, "", "", "", "")
+        if (Languages.script(targetCode) == Script.LATIN) {
+            return none
         }
 
-        val latin = TransliterationEngine.arabicScriptToLatin(targetText)
+        val latin = TransliterationEngine.toLatin(targetText, targetCode)
         if (latin.isBlank()) {
-            return TransliterationResult(false, "", "", "", "")
+            return none
         }
 
-        val scriptCode = if (sourceCode in supportedCodes) sourceCode else "en"
+        // Write the pronunciation in the speaker's own script, or Latin if they share the target's script.
+        val scriptCode = when {
+            sourceCode !in supportedCodes -> "en"
+            Languages.script(sourceCode) == Languages.script(targetCode) -> "en"
+            else -> sourceCode
+        }
         val scriptText = TransliterationEngine.latinToScript(latin, scriptCode)
 
         return TransliterationResult(
             available = scriptText.isNotBlank(),
             scriptCode = scriptCode,
-            scriptLabel = labelForCode(scriptCode),
+            scriptLabel = if (Languages.script(scriptCode) == Script.LATIN) "Latin" else labelForCode(scriptCode),
             scriptText = scriptText,
             latinText = latin,
         )
@@ -1998,7 +2074,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     }
 
     private fun applyDirection(textView: TextView, code: String) {
-        val rtl = code == "fa" || code == "ar"
+        val rtl = Languages.isRtl(code)
         textView.textDirection = if (rtl) View.TEXT_DIRECTION_RTL else View.TEXT_DIRECTION_LTR
         textView.gravity = if (rtl) Gravity.END else Gravity.START
     }
@@ -2048,12 +2124,20 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         return listOf(specific, generic).distinctBy { it.toLanguageTag() }
     }
 
-    private fun configureVoiceForCode(tts: TextToSpeech, code: String): Boolean {
+    private fun configureVoiceForCode(tts: TextToSpeech, code: String, pinnedVoiceName: String? = null): Boolean {
         val normalized = normalizeCode(code)
-        val matchingVoice = tts.voices
-            ?.filter { normalizeCode(it.locale.toLanguageTag()) == normalized }
-            ?.sortedBy { if (it.isNetworkConnectionRequired) 1 else 0 }
-            ?.firstOrNull()
+        val voices = runCatching { tts.voices }.getOrNull().orEmpty()
+        if (pinnedVoiceName != null) {
+            voices.firstOrNull { it.name == pinnedVoiceName }?.let { voice ->
+                tts.voice = voice
+                return true
+            }
+        }
+        val matchingVoice = voices
+            .filter { normalizeCode(it.locale.toLanguageTag()) == normalized }
+            .filterNot { it.features.orEmpty().contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) }
+            .sortedBy { if (it.isNetworkConnectionRequired) 1 else 0 }
+            .firstOrNull()
 
         if (matchingVoice != null) {
             tts.voice = matchingVoice
@@ -2100,35 +2184,50 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         setStatus("No voice settings activity found on this device.", isError = true)
     }
 
+    /** Resolves an engine + voice for [code] and applies speech rate. Null (with a status message) if none. */
+    private suspend fun prepareTtsFor(code: String): TtsEngineRoute? {
+        val route = resolveRouteForOutputCode(code)
+        if (route == null) {
+            availableTtsByCode[code] = false
+            setStatus("No text-to-speech engine is available for ${labelForCode(code)}.", isError = true)
+            return null
+        }
+
+        if (!configureVoiceForCode(route.tts, code, route.pinnedVoiceName)) {
+            availableTtsByCode[code] = false
+            val engineName = engineLabelForPackage(route.enginePackage)
+            setStatus("No ${labelForCode(code)} voice available in $engineName.", isError = true)
+            return null
+        }
+
+        availableTtsByCode[code] = true
+        route.tts.setSpeechRate(currentSpeechRate())
+        return route
+    }
+
+    /**
+     * Queues [text] in chunks the engine can accept. Returns the utterance IDs in order, or an
+     * empty list if the engine refused the first chunk.
+     */
+    private fun enqueueSpeech(tts: TextToSpeech, text: String, idPrefix: String): List<String> {
+        val maxLength = runCatching { TextToSpeech.getMaxSpeechInputLength() }.getOrDefault(4000)
+        val ids = mutableListOf<String>()
+        SpeechText.chunk(text, maxLength).forEachIndexed { index, chunk ->
+            val id = "$idPrefix-${SystemClock.elapsedRealtime()}-$index"
+            val mode = if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+            if (tts.speak(chunk, mode, null, id) == TextToSpeech.ERROR) {
+                return if (index == 0) emptyList() else ids
+            }
+            ids += id
+        }
+        return ids
+    }
+
     private fun speakTarget(text: String, targetCode: String) {
         appScope.launch {
             val code = normalizeCode(targetCode)
-            val route = resolveRouteForOutputCode(code)
-            if (route == null) {
-                availableTtsByCode[code] = false
-                setStatus("No text-to-speech engine is available for ${labelForCode(code)}.", isError = true)
-                return@launch
-            }
-
-            val tts = route.tts
-            val localeReady = configureVoiceForCode(tts, code)
-            if (!localeReady) {
-                availableTtsByCode[code] = false
-                val engineName = engineLabelForPackage(route.enginePackage)
-                setStatus("No ${labelForCode(code)} voice available in $engineName.", isError = true)
-                return@launch
-            }
-
-            availableTtsByCode[code] = true
-            tts.setSpeechRate(currentSpeechRate())
-            val speakResult = tts.speak(
-                text,
-                TextToSpeech.QUEUE_FLUSH,
-                null,
-                "speak-${SystemClock.elapsedRealtime()}"
-            )
-
-            if (speakResult == TextToSpeech.ERROR) {
+            val route = prepareTtsFor(code) ?: return@launch
+            if (enqueueSpeech(route.tts, text, "speak").isEmpty()) {
                 val engineName = engineLabelForPackage(route.enginePackage)
                 setStatus("Speech playback failed in $engineName.", isError = true)
             }
@@ -2138,32 +2237,20 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     @Suppress("OVERRIDE_DEPRECATION")
     private suspend fun speakTargetAndWait(text: String, targetCode: String): Boolean {
         val code = normalizeCode(targetCode)
-        val route = resolveRouteForOutputCode(code)
-        if (route == null) {
-            availableTtsByCode[code] = false
-            setStatus("No text-to-speech engine is available for ${labelForCode(code)}.", isError = true)
-            return false
-        }
-
+        val route = prepareTtsFor(code) ?: return false
         val tts = route.tts
-        val localeReady = configureVoiceForCode(tts, code)
-        if (!localeReady) {
-            availableTtsByCode[code] = false
-            val engineName = engineLabelForPackage(route.enginePackage)
-            setStatus("No ${labelForCode(code)} voice available in $engineName.", isError = true)
-            return false
-        }
-
-        availableTtsByCode[code] = true
-        tts.setSpeechRate(currentSpeechRate())
-        val utteranceId = "converse-${SystemClock.elapsedRealtime()}"
         isConverseSpeaking = true
 
-        val completed = withTimeoutOrNull(15000L) {
+        val completed = withTimeoutOrNull(SpeechText.speakTimeoutMillis(text, currentSpeechRate())) {
             suspendCancellableCoroutine { continuation ->
+                // onDone arrives on a binder thread and can beat us to recording the last ID.
+                val lock = Any()
+                var lastUtteranceId = ""
+                val finishedIds = mutableSetOf<String>()
+                val ourPrefix = "converse-"
                 tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceIdFromEngine: String?) {
-                        if (utteranceIdFromEngine == utteranceId && isConverseActive) {
+                        if (utteranceIdFromEngine?.startsWith(ourPrefix) == true && isConverseActive) {
                             appScope.launch {
                                 updateConverseStatus("Speaking ${labelForCode(code)}...")
                             }
@@ -2171,27 +2258,37 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
                     }
 
                     override fun onDone(utteranceIdFromEngine: String?) {
-                        if (utteranceIdFromEngine == utteranceId && continuation.isActive) {
+                        val isLast = synchronized(lock) {
+                            utteranceIdFromEngine?.let { finishedIds += it }
+                            utteranceIdFromEngine == lastUtteranceId
+                        }
+                        if (isLast && continuation.isActive) {
                             continuation.resume(true)
                         }
                     }
 
                     override fun onError(utteranceIdFromEngine: String?) {
-                        if (utteranceIdFromEngine == utteranceId && continuation.isActive) {
+                        if (utteranceIdFromEngine?.startsWith(ourPrefix) == true && continuation.isActive) {
                             continuation.resume(false)
                         }
                     }
 
                     override fun onError(utteranceIdFromEngine: String?, errorCode: Int) {
-                        if (utteranceIdFromEngine == utteranceId && continuation.isActive) {
+                        if (utteranceIdFromEngine?.startsWith(ourPrefix) == true && continuation.isActive) {
                             continuation.resume(false)
                         }
                     }
                 })
 
-                val speakResult = tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, utteranceId)
-                if (speakResult == TextToSpeech.ERROR && continuation.isActive) {
-                    continuation.resume(false)
+                val ids = enqueueSpeech(tts, text, "converse")
+                if (ids.isEmpty()) {
+                    if (continuation.isActive) continuation.resume(false)
+                } else {
+                    val alreadyDone = synchronized(lock) {
+                        lastUtteranceId = ids.last()
+                        lastUtteranceId in finishedIds
+                    }
+                    if (alreadyDone && continuation.isActive) continuation.resume(true)
                 }
             }
         } ?: false
@@ -2280,12 +2377,12 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     private suspend fun pickBestAutoTranscript(candidates: List<String>): Pair<String, String> {
         var bestTranscript = candidates.first()
         var bestSource = detectSourceLanguage(bestTranscript)
-        var bestScore = scoreMainTranscriptCandidate(bestTranscript, bestSource, 0)
+        var bestScore = ScriptHeuristics.scoreAutoCandidate(bestTranscript, bestSource, 0)
 
         for (index in 1 until candidates.size) {
             val candidate = candidates[index]
             val detectedSource = detectSourceLanguage(candidate)
-            val candidateScore = scoreMainTranscriptCandidate(candidate, detectedSource, index)
+            val candidateScore = ScriptHeuristics.scoreAutoCandidate(candidate, detectedSource, index)
             if (candidateScore > bestScore) {
                 bestTranscript = candidate
                 bestSource = detectedSource
@@ -2296,34 +2393,8 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         return bestTranscript to bestSource
     }
 
-    private fun pickBestTranscriptForForcedSource(candidates: List<String>, sourceCode: String): String {
-        return candidates.maxByOrNull { scoreForcedSourceTranscript(it, sourceCode) } ?: candidates.first()
-    }
-
-    private fun scoreMainTranscriptCandidate(transcript: String, sourceCode: String, index: Int): Int {
-        val normalizedSource = normalizeCode(sourceCode)
-        var score = scoreLanguageForTranscript(transcript, normalizedSource) * 4
-        score += when (normalizedSource) {
-            "fa", "ar" -> if (containsArabicScript(transcript)) 6 else -2
-            "uk", "ru" -> if (containsCyrillic(transcript)) 6 else -2
-            else -> if (!containsArabicScript(transcript) && !containsCyrillic(transcript)) 2 else 0
-        }
-        score += minOf(transcript.count { it.isLetter() } / 6, 4)
-        score -= index
-        return score
-    }
-
-    private fun scoreForcedSourceTranscript(transcript: String, sourceCode: String): Int {
-        val normalizedSource = normalizeCode(sourceCode)
-        var score = scoreLanguageForTranscript(transcript, normalizedSource) * 5
-        score += when (normalizedSource) {
-            "fa", "ar" -> if (containsArabicScript(transcript)) 8 else -2
-            "uk", "ru" -> if (containsCyrillic(transcript)) 8 else -2
-            else -> if (!containsArabicScript(transcript) && !containsCyrillic(transcript)) 2 else -1
-        }
-        score += minOf(transcript.length / 8, 4)
-        return score
-    }
+    private fun pickBestTranscriptForForcedSource(candidates: List<String>, sourceCode: String): String =
+        ScriptHeuristics.pickBestForcedTranscript(candidates, sourceCode)
 
     private fun resetCaptureState() {
         activeButton?.let { button ->
@@ -2395,19 +2466,13 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         translit.setTextSize(TypedValue.COMPLEX_UNIT_SP, base)
     }
 
-    private fun labelForCode(code: String): String {
-        return languageOptions.firstOrNull { it.code == code }?.label ?: code
-    }
+    private fun labelForCode(code: String): String = Languages.label(code)
 
-    private fun localeTagForCode(code: String): String {
-        return languageOptions.firstOrNull { it.code == code }?.localeTag ?: "en-US"
-    }
+    private fun localeTagForCode(code: String): String = Languages.localeTag(code)
 
     private fun recognitionTagForCode(code: String): String {
-        return when (normalizeCode(code)) {
-            "en", "fa", "uk", "ru", "ar", "fr", "es" -> normalizeCode(code)
-            else -> localeTagForCode(code)
-        }
+        val normalized = normalizeCode(code)
+        return if (normalized in supportedCodes) normalized else localeTagForCode(code)
     }
 
     private fun hasAudioPermission(): Boolean {
@@ -2528,433 +2593,16 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         appScope.cancel()
     }
 
-    private fun normalizeCode(code: String?): String {
-        if (code.isNullOrBlank()) {
-            return ""
-        }
-        return code.lowercase(Locale.US).substringBefore('-')
-    }
+    private fun normalizeCode(code: String?): String = Languages.normalizeCode(code)
 
-    private fun containsArabicScript(text: String): Boolean = text.any { it in '\u0600'..'\u06FF' }
-
-    private fun containsCyrillic(text: String): Boolean = text.any { it in '\u0400'..'\u04FF' }
-
-    private fun looksFarsi(text: String): Boolean {
-        val markers = listOf('گ', 'چ', 'پ', 'ژ', 'ی')
-        return text.any { it in markers }
-    }
-
-    private fun looksUkrainian(text: String): Boolean {
-        val markers = listOf('і', 'ї', 'є', 'ґ', 'І', 'Ї', 'Є', 'Ґ')
-        return text.any { it in markers }
-    }
-
-    private fun looksSpanish(text: String): Boolean {
-        return listOf(" el ", " la ", " de ", " que ", " y ", " por ", " para ", " con ")
-            .any { text.contains(it) } || text.any { it in listOf('ñ', 'á', 'é', 'í', 'ó', 'ú', '¿', '¡') }
-    }
-
-    private fun looksFrench(text: String): Boolean {
-        return listOf(" le ", " la ", " les ", " des ", " est ", " pour ", " avec ", " une ")
-            .any { text.contains(it) } || text.any { it in listOf('à', 'â', 'ç', 'é', 'è', 'ê', 'ë', 'î', 'ï', 'ô', 'ù', 'û', 'ü') }
-    }
-}
-
-private object TransliterationEngine {
-
-    private val arabicToLatin = mapOf(
-        "ا" to "a",
-        "آ" to "aa",
-        "أ" to "a",
-        "إ" to "e",
-        "ٱ" to "a",
-        "ء" to "",
-        "ؤ" to "u",
-        "ئ" to "y",
-        "ب" to "b",
-        "پ" to "p",
-        "ت" to "t",
-        "ث" to "s",
-        "ج" to "j",
-        "چ" to "ch",
-        "ح" to "h",
-        "خ" to "kh",
-        "د" to "d",
-        "ذ" to "z",
-        "ر" to "r",
-        "ز" to "z",
-        "ژ" to "zh",
-        "س" to "s",
-        "ش" to "sh",
-        "ص" to "s",
-        "ض" to "z",
-        "ط" to "t",
-        "ظ" to "z",
-        "ع" to "a",
-        "غ" to "gh",
-        "ف" to "f",
-        "ق" to "q",
-        "ك" to "k",
-        "ک" to "k",
-        "گ" to "g",
-        "ل" to "l",
-        "م" to "m",
-        "ن" to "n",
-        "ه" to "h",
-        "ة" to "a",
-        "و" to "u",
-        "ي" to "y",
-        "ی" to "y",
-        "ى" to "a",
-        "َ" to "a",
-        "ِ" to "i",
-        "ُ" to "u",
-        "ً" to "an",
-        "ٍ" to "in",
-        "ٌ" to "un",
-        "ْ" to "",
-        "ّ" to "",
-        "\u200c" to "",
-    )
-
-    private val ukDigraphs = listOf(
-        "shch" to "щ",
-        "zh" to "ж",
-        "kh" to "х",
-        "ch" to "ч",
-        "sh" to "ш",
-        "ts" to "ц",
-        "ya" to "я",
-        "yu" to "ю",
-        "yo" to "йо",
-        "ye" to "є",
-        "yi" to "ї",
-        "ia" to "я",
-        "iu" to "ю",
-        "ie" to "є",
-    )
-
-    private val ukSingle = mapOf(
-        'a' to "а",
-        'b' to "б",
-        'c' to "к",
-        'd' to "д",
-        'e' to "е",
-        'f' to "ф",
-        'g' to "ґ",
-        'h' to "г",
-        'i' to "і",
-        'j' to "дж",
-        'k' to "к",
-        'l' to "л",
-        'm' to "м",
-        'n' to "н",
-        'o' to "о",
-        'p' to "п",
-        'q' to "к",
-        'r' to "р",
-        's' to "с",
-        't' to "т",
-        'u' to "у",
-        'v' to "в",
-        'w' to "в",
-        'x' to "кс",
-        'y' to "й",
-        'z' to "з",
-    )
-
-    private val ruDigraphs = listOf(
-        "shch" to "щ",
-        "zh" to "ж",
-        "kh" to "х",
-        "ch" to "ч",
-        "sh" to "ш",
-        "ts" to "ц",
-        "ya" to "я",
-        "yu" to "ю",
-        "yo" to "ё",
-        "ye" to "е",
-        "yi" to "и",
-        "ia" to "я",
-        "iu" to "ю",
-        "ie" to "е",
-    )
-
-    private val ruSingle = mapOf(
-        'a' to "а",
-        'b' to "б",
-        'c' to "к",
-        'd' to "д",
-        'e' to "е",
-        'f' to "ф",
-        'g' to "г",
-        'h' to "х",
-        'i' to "и",
-        'j' to "дж",
-        'k' to "к",
-        'l' to "л",
-        'm' to "м",
-        'n' to "н",
-        'o' to "о",
-        'p' to "п",
-        'q' to "к",
-        'r' to "р",
-        's' to "с",
-        't' to "т",
-        'u' to "у",
-        'v' to "в",
-        'w' to "в",
-        'x' to "кс",
-        'y' to "й",
-        'z' to "з",
-    )
-
-    private val ukCyrillicToLatin = mapOf(
-        'а' to "a",
-        'б' to "b",
-        'в' to "v",
-        'г' to "h",
-        'ґ' to "g",
-        'д' to "d",
-        'е' to "e",
-        'є' to "ye",
-        'ж' to "zh",
-        'з' to "z",
-        'и' to "y",
-        'і' to "i",
-        'ї' to "yi",
-        'й' to "y",
-        'к' to "k",
-        'л' to "l",
-        'м' to "m",
-        'н' to "n",
-        'о' to "o",
-        'п' to "p",
-        'р' to "r",
-        'с' to "s",
-        'т' to "t",
-        'у' to "u",
-        'ф' to "f",
-        'х' to "kh",
-        'ц' to "ts",
-        'ч' to "ch",
-        'ш' to "sh",
-        'щ' to "shch",
-        'ь' to "",
-        'ю' to "yu",
-        'я' to "ya",
-    )
-
-    private val ruCyrillicToLatin = mapOf(
-        'а' to "a",
-        'б' to "b",
-        'в' to "v",
-        'г' to "g",
-        'д' to "d",
-        'е' to "e",
-        'ё' to "yo",
-        'ж' to "zh",
-        'з' to "z",
-        'и' to "i",
-        'й' to "y",
-        'к' to "k",
-        'л' to "l",
-        'м' to "m",
-        'н' to "n",
-        'о' to "o",
-        'п' to "p",
-        'р' to "r",
-        'с' to "s",
-        'т' to "t",
-        'у' to "u",
-        'ф' to "f",
-        'х' to "kh",
-        'ц' to "ts",
-        'ч' to "ch",
-        'ш' to "sh",
-        'щ' to "shch",
-        'ъ' to "",
-        'ы' to "y",
-        'ь' to "",
-        'э' to "e",
-        'ю' to "yu",
-        'я' to "ya",
-    )
-
-    private val faDigraphs = listOf(
-        "sh" to "ش",
-        "kh" to "خ",
-        "gh" to "غ",
-        "ch" to "چ",
-        "zh" to "ژ",
-        "th" to "ث",
-        "dh" to "ذ",
-        "aa" to "ا",
-        "ee" to "ی",
-        "oo" to "و",
-        "ou" to "و",
-    )
-
-    private val faSingle = mapOf(
-        'a' to "ا",
-        'b' to "ب",
-        'c' to "ک",
-        'd' to "د",
-        'e' to "ی",
-        'f' to "ف",
-        'g' to "گ",
-        'h' to "ه",
-        'i' to "ی",
-        'j' to "ج",
-        'k' to "ک",
-        'l' to "ل",
-        'm' to "م",
-        'n' to "ن",
-        'o' to "و",
-        'p' to "پ",
-        'q' to "ق",
-        'r' to "ر",
-        's' to "س",
-        't' to "ت",
-        'u' to "و",
-        'v' to "و",
-        'w' to "و",
-        'x' to "کس",
-        'y' to "ی",
-        'z' to "ز",
-    )
-
-    private val arDigraphs = listOf(
-        "sh" to "ش",
-        "kh" to "خ",
-        "gh" to "غ",
-        "ch" to "تش",
-        "zh" to "ج",
-        "th" to "ث",
-        "dh" to "ذ",
-        "aa" to "ا",
-        "ee" to "ي",
-        "oo" to "و",
-        "ou" to "و",
-    )
-
-    private val arSingle = mapOf(
-        'a' to "ا",
-        'b' to "ب",
-        'c' to "ك",
-        'd' to "د",
-        'e' to "ي",
-        'f' to "ف",
-        'g' to "ج",
-        'h' to "ه",
-        'i' to "ي",
-        'j' to "ج",
-        'k' to "ك",
-        'l' to "ل",
-        'm' to "م",
-        'n' to "ن",
-        'o' to "و",
-        'p' to "ب",
-        'q' to "ق",
-        'r' to "ر",
-        's' to "س",
-        't' to "ت",
-        'u' to "و",
-        'v' to "و",
-        'w' to "و",
-        'x' to "كس",
-        'y' to "ي",
-        'z' to "ز",
-    )
-
-    fun arabicScriptToLatin(text: String): String {
-        val normalized = text.replace("ﻻ", "لا")
-        val out = StringBuilder()
-        var index = 0
-        while (index < normalized.length) {
-            if (index + 1 < normalized.length && normalized.substring(index, index + 2) == "لا") {
-                out.append("la")
-                index += 2
-                continue
-            }
-            val ch = normalized[index].toString()
-            out.append(arabicToLatin[ch] ?: ch)
-            index += 1
-        }
-        return collapseSpaces(out.toString())
-    }
-
-    fun latinToScript(latinText: String, targetScriptCode: String): String {
-        val normalized = collapseSpaces(latinText)
-        return when (targetScriptCode) {
-            "en", "fr", "es" -> normalized
-            "uk" -> transliterateWithMaps(normalized, ukDigraphs, ukSingle)
-            "ru" -> transliterateWithMaps(normalized, ruDigraphs, ruSingle)
-            "fa" -> transliterateWithMaps(normalized, faDigraphs, faSingle)
-            "ar" -> transliterateWithMaps(normalized, arDigraphs, arSingle)
-            else -> normalized
-        }
-    }
-
-    fun cyrillicToLatin(text: String, sourceScriptCode: String): String {
-        val mapping = when (sourceScriptCode) {
-            "uk" -> ukCyrillicToLatin
-            "ru" -> ruCyrillicToLatin
-            else -> emptyMap()
-        }
-        if (mapping.isEmpty()) {
-            return collapseSpaces(text)
-        }
-
-        val out = StringBuilder()
-        text.forEach { ch ->
-            val lower = ch.lowercaseChar()
-            val mapped = mapping[lower]
-            if (mapped == null) {
-                out.append(ch)
-            } else if (ch.isUpperCase() && mapped.isNotBlank()) {
-                out.append(mapped.replaceFirstChar { it.uppercase(Locale.US) })
-            } else {
-                out.append(mapped)
-            }
-        }
-        return collapseSpaces(out.toString())
-    }
-
-    private fun transliterateWithMaps(
-        text: String,
-        digraphs: List<Pair<String, String>>,
-        single: Map<Char, String>,
-    ): String {
-        val lower = text.lowercase(Locale.US)
-        val out = StringBuilder()
-        var index = 0
-
-        while (index < text.length) {
-            var matched = false
-
-            for ((pattern, replacement) in digraphs) {
-                if (lower.startsWith(pattern, index)) {
-                    out.append(replacement)
-                    index += pattern.length
-                    matched = true
-                    break
-                }
-            }
-
-            if (matched) {
-                continue
-            }
-
-            val key = lower[index]
-            out.append(single[key] ?: text[index])
-            index += 1
-        }
-
-        return collapseSpaces(out.toString())
-    }
-
-    private fun collapseSpaces(text: String): String {
-        return text.trim().replace(Regex("\\s+"), " ")
+    private companion object {
+        const val PREF_TARGET_CODE = "target_code"
+        const val PREF_CONVERSE_A = "converse_code_a"
+        const val PREF_CONVERSE_B = "converse_code_b"
+        const val PREF_CONVERSE_SEGMENTED = "converse_segmented_session"
+        const val PREF_SPEECH_RATE_PROGRESS = "speech_rate_progress"
+        const val PREF_OUTPUT_SIZE_PROGRESS = "output_size_progress"
+        const val PREF_VOICE_PREFIX = "voice_"
+        const val PINNED_VOICE_SEPARATOR = "|"
     }
 }
