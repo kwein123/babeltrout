@@ -7,6 +7,7 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
+import android.net.ConnectivityManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -58,6 +59,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.File
 import java.time.LocalDate
 import java.time.LocalTime
 import java.util.Locale
@@ -143,6 +145,11 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     private val readyTranslatorPairs = mutableSetOf<String>()
 
     private val pairSourceResolver = PairSourceResolver()
+
+    /** Built-in Piper voices (sherpa-onnx), stored in app-private storage. */
+    private val piperStore by lazy { PiperVoiceStore(File(filesDir, "piper")) }
+    private val piperSpeaker by lazy { PiperSpeaker(piperStore) }
+    private var isDownloadingVoice = false
 
     private val entries = mutableListOf<EntryRecord>()
 
@@ -863,6 +870,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         converseSegments.clear()
         converseLastPartial = ""
         pairSourceResolver.reset()
+        piperSpeaker.stop()
         runCatching { converseSpeechRecognizer.cancel() }
         updateConverseToggleUi()
         updateConverseStatus("Conversation mic is off.")
@@ -1122,6 +1130,10 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             showVoiceLanguagePicker()
         }
 
+        binding.btnVoiceLibrary.setOnClickListener {
+            showVoiceLibraryLanguagePicker()
+        }
+
         binding.btnInstallTtsApk.setOnClickListener {
             pickTtsApkLauncher.launch(arrayOf("application/vnd.android.package-archive", "*/*"))
         }
@@ -1295,6 +1307,28 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         return if (engine.isBlank() || voice.isBlank()) null else engine to voice
     }
 
+    /**
+     * The built-in voice to use for [code], or null to use an Android TTS engine.
+     * A pinned built-in voice always wins; a voice pinned in another engine means "not built-in".
+     * With nothing pinned, Farsi prefers a built-in voice over SherpaTTS.
+     */
+    private fun inAppVoiceFor(code: String): PiperVoiceStore.Installed? {
+        val normalized = normalizeCode(code)
+        val pinned = pinnedVoiceFor(normalized)
+        if (pinned != null) {
+            return if (pinned.first == IN_APP_ENGINE) piperStore.findByKey(pinned.second) else null
+        }
+        if (normalized != "fa") return null
+        val installed = piperStore.installed(normalized)
+        return installed.firstOrNull { it.quality == PiperVoiceCatalog.Quality.FULL } ?: installed.firstOrNull()
+    }
+
+    private fun stopAllSpeech() {
+        piperSpeaker.stop()
+        runCatching { textToSpeech?.stop() }
+        namedEngineTts.values.forEach { runCatching { it.stop() } }
+    }
+
     private suspend fun resolveRouteForOutputCode(code: String): TtsEngineRoute? {
         val normalizedCode = normalizeCode(code)
 
@@ -1362,10 +1396,24 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         return choices
     }
 
+    /** Human-readable name for a pinned (engine, voice) pair. */
+    private fun pinnedLabel(pinned: Pair<String, String>): String =
+        if (pinned.first == IN_APP_ENGINE) {
+            piperStore.findByKey(pinned.second)?.let { "${it.label}, built-in" } ?: "built-in voice (not installed)"
+        } else {
+            pinned.second
+        }
+
+    private fun pinVoice(code: String, engine: String, voiceName: String) {
+        prefs.edit().putString(PREF_VOICE_PREFIX + normalizeCode(code), engine + PINNED_VOICE_SEPARATOR + voiceName).apply()
+    }
+
     private fun showVoiceLanguagePicker() {
         val labels = languageOptions.map { option ->
-            val pinned = pinnedVoiceFor(option.code)
-            "${option.label}: ${pinned?.second ?: "automatic"}"
+            val current = pinnedVoiceFor(option.code)?.let { pinnedLabel(it) }
+                ?: inAppVoiceFor(option.code)?.let { "automatic (${it.label})" }
+                ?: "automatic"
+            "${option.label}: $current"
         }
         AlertDialog.Builder(this)
             .setTitle("Choose a voice for...")
@@ -1374,44 +1422,204 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             .show()
     }
 
+    private sealed class VoiceMenuItem(val label: String) {
+        class Automatic(label: String) : VoiceMenuItem(label)
+        class BuiltIn(val installed: PiperVoiceStore.Installed) : VoiceMenuItem("Built-in: ${installed.label}")
+        class System(val choice: VoiceChoice, label: String) : VoiceMenuItem(label)
+        class Library(label: String) : VoiceMenuItem(label)
+    }
+
     private fun showVoicesForLanguage(option: LanguageOption) {
         setStatus("Looking for ${option.label} voices...")
         appScope.launch {
-            val choices = collectVoices(option.code)
-            if (choices.isEmpty()) {
-                setStatus(
-                    "No ${option.label} voices found. Install one via Voice Settings" +
-                        if (option.code == "fa") " or import a Piper voice into SherpaTTS." else ".",
-                    isError = true
-                )
+            val builtIn = piperStore.installed(option.code)
+            val system = collectVoices(option.code)
+            val hasCatalog = PiperVoiceCatalog.forLanguage(option.code).isNotEmpty()
+
+            val items = mutableListOf<VoiceMenuItem>(VoiceMenuItem.Automatic("Automatic (Babeltrout picks)"))
+            builtIn.forEach { items += VoiceMenuItem.BuiltIn(it) }
+            system.forEach { items += VoiceMenuItem.System(it, "${it.engineLabel}: ${describeVoice(it.voice)}") }
+            if (hasCatalog) items += VoiceMenuItem.Library("Download more ${option.label} voices...")
+
+            if (builtIn.isEmpty() && system.isEmpty() && !hasCatalog) {
+                setStatus("No ${option.label} voices found. Install one via Voice Settings.", isError = true)
                 return@launch
             }
 
             val pinned = pinnedVoiceFor(option.code)
-            val labels = listOf("Automatic (Babeltrout picks)") +
-                choices.map { "${it.engineLabel}: ${describeVoice(it.voice)}" }
-            val checked = choices.indexOfFirst { it.enginePackage == pinned?.first && it.voice.name == pinned.second } + 1
+            val checked = items.indexOfFirst { item ->
+                when (item) {
+                    is VoiceMenuItem.Automatic -> pinned == null
+                    is VoiceMenuItem.BuiltIn -> pinned?.first == IN_APP_ENGINE && pinned.second == item.installed.key
+                    is VoiceMenuItem.System -> pinned?.first == item.choice.enginePackage && pinned.second == item.choice.voice.name
+                    is VoiceMenuItem.Library -> false
+                }
+            }
 
             AlertDialog.Builder(this@MainActivity)
-                .setTitle("${option.label} voice (${choices.size} found)")
-                .setSingleChoiceItems(labels.toTypedArray(), checked) { dialog, which ->
-                    val key = PREF_VOICE_PREFIX + option.code
-                    if (which == 0) {
-                        prefs.edit().remove(key).apply()
-                        setStatus("${option.label} voice: automatic.")
-                    } else {
-                        val choice = choices[which - 1]
-                        prefs.edit()
-                            .putString(key, choice.enginePackage + PINNED_VOICE_SEPARATOR + choice.voice.name)
-                            .apply()
-                        setStatus("${option.label} voice: ${choice.voice.name} (${choice.engineLabel}). Playing sample...")
-                    }
+                .setTitle("${option.label} voice (${builtIn.size + system.size} installed)")
+                .setSingleChoiceItems(items.map { it.label }.toTypedArray(), checked) { dialog, which ->
                     dialog.dismiss()
+                    when (val item = items[which]) {
+                        is VoiceMenuItem.Library -> {
+                            showVoiceLibrary(option)
+                            return@setSingleChoiceItems
+                        }
+                        is VoiceMenuItem.Automatic -> {
+                            prefs.edit().remove(PREF_VOICE_PREFIX + option.code).apply()
+                            setStatus("${option.label} voice: automatic.")
+                        }
+                        is VoiceMenuItem.BuiltIn -> {
+                            pinVoice(option.code, IN_APP_ENGINE, item.installed.key)
+                            setStatus("${option.label} voice: ${item.installed.label} (built-in). Playing sample...")
+                        }
+                        is VoiceMenuItem.System -> {
+                            pinVoice(option.code, item.choice.enginePackage, item.choice.voice.name)
+                            setStatus("${option.label} voice: ${item.choice.voice.name} (${item.choice.engineLabel}). Playing sample...")
+                        }
+                    }
                     speakTarget(option.sampleText, option.code)
                 }
                 .setNegativeButton("Cancel", null)
                 .show()
-            setStatus("Found ${choices.size} ${option.label} voice(s).")
+            setStatus("Found ${builtIn.size + system.size} ${option.label} voice(s).")
+        }
+    }
+
+    // ---- Voice library: built-in Piper voices you can download --------------------------------
+
+    private fun showVoiceLibraryLanguagePicker() {
+        val languages = languageOptions.filter { PiperVoiceCatalog.forLanguage(it.code).isNotEmpty() }
+        AlertDialog.Builder(this)
+            .setTitle("Voice Library")
+            .setItems(languages.map { option ->
+                val installed = piperStore.installed(option.code).size
+                "${option.label} (${PiperVoiceCatalog.forLanguage(option.code).size} voices, $installed installed)"
+            }.toTypedArray()) { _, which -> showVoiceLibrary(languages[which]) }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showVoiceLibrary(option: LanguageOption) {
+        val voices = PiperVoiceCatalog.forLanguage(option.code)
+        val installed = piperStore.installed(option.code)
+        val labels = voices.map { voice ->
+            val have = installed.filter { it.voice.id == voice.id }
+            if (have.isNotEmpty()) {
+                "${voice.displayName}: installed (${have.joinToString { it.quality.label }})"
+            } else {
+                val compact = voice.pkg(PiperVoiceCatalog.Quality.COMPACT)?.sizeMb
+                val full = voice.pkg(PiperVoiceCatalog.Quality.FULL)?.sizeMb
+                "${voice.displayName}: download ($compact MB compact / $full MB full)"
+            }
+        }
+        AlertDialog.Builder(this)
+            .setTitle("${option.label} voices")
+            .setItems(labels.toTypedArray()) { _, which -> showVoiceActions(option, voices[which]) }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun showVoiceActions(option: LanguageOption, voice: PiperVoiceCatalog.Voice) {
+        val have = piperStore.installed(option.code).filter { it.voice.id == voice.id }
+        val compact = voice.pkg(PiperVoiceCatalog.Quality.COMPACT)
+        val full = voice.pkg(PiperVoiceCatalog.Quality.FULL)
+        val message = buildString {
+            append(voice.description)
+            append("\n\nLicense: ${voice.license}. Runs offline inside Babeltrout.")
+            append("\nCompact is smaller and a little faster; full quality is the original model.")
+            if (have.isNotEmpty()) append("\n\nInstalled: ${have.joinToString { it.quality.label }}.")
+        }
+        val builder = AlertDialog.Builder(this)
+            .setTitle(voice.displayName)
+            .setMessage(message)
+
+        if (have.isNotEmpty()) {
+            val current = have.first()
+            builder.setPositiveButton("Use & play sample") { _, _ ->
+                pinVoice(option.code, IN_APP_ENGINE, current.key)
+                setStatus("${option.label} voice: ${current.label} (built-in).")
+                speakTarget(option.sampleText, option.code)
+            }
+            builder.setNegativeButton("Delete") { _, _ -> confirmDeleteVoice(option, have) }
+            val missing = listOfNotNull(compact, full).firstOrNull { pkg -> have.none { it.quality == pkg.quality } }
+            if (missing != null) {
+                builder.setNeutralButton("Get ${missing.quality.label} (${missing.sizeMb} MB)") { _, _ ->
+                    startVoiceDownload(option, voice, missing)
+                }
+            }
+        } else {
+            compact?.let { pkg ->
+                builder.setPositiveButton("Compact (${pkg.sizeMb} MB)") { _, _ -> startVoiceDownload(option, voice, pkg) }
+            }
+            full?.let { pkg ->
+                builder.setNeutralButton("Full (${pkg.sizeMb} MB)") { _, _ -> startVoiceDownload(option, voice, pkg) }
+            }
+            builder.setNegativeButton("Cancel", null)
+        }
+        builder.show()
+    }
+
+    private fun confirmDeleteVoice(option: LanguageOption, installed: List<PiperVoiceStore.Installed>) {
+        AlertDialog.Builder(this)
+            .setTitle("Delete ${installed.first().voice.displayName}?")
+            .setMessage("You can download it again later.")
+            .setPositiveButton("Delete") { _, _ ->
+                piperSpeaker.stop()
+                installed.forEach { piperStore.delete(it) }
+                val pinned = pinnedVoiceFor(option.code)
+                if (pinned?.first == IN_APP_ENGINE && installed.any { it.key == pinned.second }) {
+                    prefs.edit().remove(PREF_VOICE_PREFIX + option.code).apply()
+                }
+                setStatus("Deleted ${installed.first().voice.displayName}.")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun isOnMeteredNetwork(): Boolean =
+        runCatching { getSystemService(ConnectivityManager::class.java)?.isActiveNetworkMetered == true }.getOrDefault(false)
+
+    private fun startVoiceDownload(option: LanguageOption, voice: PiperVoiceCatalog.Voice, pkg: PiperVoiceCatalog.Package) {
+        if (isDownloadingVoice) {
+            setStatus("A voice download is already running.")
+            return
+        }
+        if (isOnMeteredNetwork()) {
+            AlertDialog.Builder(this)
+                .setTitle("Use mobile data?")
+                .setMessage("${voice.displayName} (${pkg.quality.label}) is ${pkg.sizeMb} MB and you're not on Wi-Fi.")
+                .setPositiveButton("Download") { _, _ -> downloadVoice(option, voice, pkg) }
+                .setNegativeButton("Wait for Wi-Fi", null)
+                .show()
+            return
+        }
+        downloadVoice(option, voice, pkg)
+    }
+
+    private fun downloadVoice(option: LanguageOption, voice: PiperVoiceCatalog.Voice, pkg: PiperVoiceCatalog.Package) {
+        isDownloadingVoice = true
+        binding.btnVoiceLibrary.isEnabled = false
+        setStatus("Downloading ${voice.displayName} (${pkg.sizeMb} MB)...")
+        appScope.launch {
+            runCatching {
+                piperStore.install(voice, pkg) { done, total ->
+                    val percent = if (total > 0) (done * 100 / total).toInt() else 0
+                    runOnUiThread {
+                        setStatus("Downloading ${voice.displayName}: $percent% (${done / 1_000_000} of ${pkg.sizeMb} MB)")
+                    }
+                }
+            }.onSuccess { installed ->
+                // A freshly downloaded voice is almost always the one the user wants to hear next.
+                pinVoice(option.code, IN_APP_ENGINE, installed.key)
+                setStatus("${installed.label} installed and selected for ${option.label}. Playing sample...")
+                speakTarget(option.sampleText, option.code)
+                checkVoiceSupport(manual = false)
+            }.onFailure { error ->
+                setStatus("Voice download failed: ${error.message}", isError = true)
+            }
+            isDownloadingVoice = false
+            binding.btnVoiceLibrary.isEnabled = true
         }
     }
 
@@ -1541,7 +1749,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         if (sherpaPackage == null) {
             lines += "SherpaTTS installed: no"
             issues += "SherpaTTS package was not detected."
-            fixes += "Tap Install TTS APK and install the SherpaTTS APK."
+            fixes += "Tap Voice Library and download a built-in Farsi voice (recommended), or install SherpaTTS."
         } else if (sherpaVersion.isNullOrBlank()) {
             lines += "SherpaTTS installed: yes (version unreadable)"
         } else {
@@ -1590,12 +1798,23 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             }
         }
 
+        val builtInFarsi = piperStore.installed("fa")
+        lines += ""
+        lines += "Built-in Farsi voices: ${builtInFarsi.size}"
+        builtInFarsi.forEach { lines += "- ${it.label}" }
+        inAppVoiceFor("fa")?.let { lines += "Farsi output uses built-in voice: ${it.label}" }
+        if (builtInFarsi.isNotEmpty()) {
+            // A built-in voice makes SherpaTTS optional, so its absence or misconfiguration isn't a problem.
+            issues.clear()
+            fixes.clear()
+        }
+
         val allFarsiVoices = collectVoices("fa")
         lines += ""
         lines += "Farsi voices across all engines: ${allFarsiVoices.size}"
         allFarsiVoices.forEach { lines += "- ${it.engineLabel}: ${describeVoice(it.voice)}" }
         val pinnedFarsi = pinnedVoiceFor("fa")
-        lines += "Chosen Farsi voice: ${pinnedFarsi?.second ?: "automatic"}"
+        lines += "Chosen Farsi voice: ${pinnedFarsi?.let { pinnedLabel(it) } ?: "automatic"}"
 
         lines += ""
         if (issues.isEmpty()) {
@@ -2093,8 +2312,9 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         appScope.launch {
             val missingLabels = mutableListOf<String>()
             languageOptions.forEach { option ->
-                val route = resolveRouteForOutputCode(option.code)
-                val supported = route != null && isVoiceAvailable(route.tts, option.code)
+                val supported = inAppVoiceFor(option.code) != null || resolveRouteForOutputCode(option.code).let { route ->
+                    route != null && isVoiceAvailable(route.tts, option.code)
+                }
                 availableTtsByCode[option.code] = supported
                 if (!supported) {
                     missingLabels.add(option.label)
@@ -2104,7 +2324,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             val message = if (missingLabels.isEmpty()) {
                 "Voices available for all app languages (auto-routed by language)."
             } else {
-                "Missing voices: ${missingLabels.joinToString(", ")}. Tap Voice Settings or Diagnose Farsi TTS."
+                "Missing voices: ${missingLabels.joinToString(", ")}. Tap Voice Library (Farsi, Hindi) or Voice Settings."
             }
 
             voicesSummaryText = message
@@ -2224,8 +2444,19 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     }
 
     private fun speakTarget(text: String, targetCode: String) {
+        val code = normalizeCode(targetCode)
+        inAppVoiceFor(code)?.let { voice ->
+            stopAllSpeech()
+            availableTtsByCode[code] = true
+            appScope.launch {
+                runCatching { piperSpeaker.speak(voice, text, currentSpeechRate()) }
+                    .onFailure { error -> setStatus("Built-in voice ${voice.label} failed: ${error.message}", isError = true) }
+            }
+            return
+        }
+
         appScope.launch {
-            val code = normalizeCode(targetCode)
+            piperSpeaker.stop()
             val route = prepareTtsFor(code) ?: return@launch
             if (enqueueSpeech(route.tts, text, "speak").isEmpty()) {
                 val engineName = engineLabelForPackage(route.enginePackage)
@@ -2237,6 +2468,24 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     @Suppress("OVERRIDE_DEPRECATION")
     private suspend fun speakTargetAndWait(text: String, targetCode: String): Boolean {
         val code = normalizeCode(targetCode)
+        inAppVoiceFor(code)?.let { voice ->
+            availableTtsByCode[code] = true
+            isConverseSpeaking = true
+            val completed = runCatching {
+                withTimeoutOrNull(SpeechText.speakTimeoutMillis(text, currentSpeechRate())) {
+                    piperSpeaker.speak(voice, text, currentSpeechRate()) {
+                        appScope.launch { if (isConverseActive) updateConverseStatus("Speaking ${labelForCode(code)}...") }
+                    }
+                } ?: false
+            }.getOrElse { error ->
+                setStatus("Built-in voice ${voice.label} failed: ${error.message}", isError = true)
+                false
+            }
+            if (!completed) piperSpeaker.stop()
+            isConverseSpeaking = false
+            return completed
+        }
+
         val route = prepareTtsFor(code) ?: return false
         val tts = route.tts
         isConverseSpeaking = true
@@ -2590,6 +2839,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         namedEngineTts.clear()
         languageIdentifier.close()
         translatorCache.values.forEach { it.close() }
+        piperSpeaker.release()
         appScope.cancel()
     }
 
@@ -2604,5 +2854,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         const val PREF_OUTPUT_SIZE_PROGRESS = "output_size_progress"
         const val PREF_VOICE_PREFIX = "voice_"
         const val PINNED_VOICE_SEPARATOR = "|"
+        /** Pseudo engine package for built-in Piper voices in pinned-voice preferences. */
+        const val IN_APP_ENGINE = "babeltrout.piper"
     }
 }

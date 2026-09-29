@@ -10,8 +10,8 @@ can say the reply yourself.
 - **Offline translation** with Google ML Kit (models download once, about 30 MB per language).
 - **Pronunciation hints**: Farsi, Arabic, Hindi, Ukrainian and Russian output gets a transliteration line
   written in the speaker's script (Latin for English, Cyrillic for Ukrainian, and so on).
-- **Farsi voices**: routes Farsi speech to SherpaTTS with any Piper Farsi voice you install, and lets you
-  choose between them.
+- **Built-in Farsi voices**: download any of five offline Piper Farsi voices (and three Hindi ones) inside
+  the app, and switch between them. No separate voice app needed.
 - **Transcript export** to `.txt`. History lives only in memory and is excluded from Android backups.
 
 > **Privacy note:** translation always runs on the phone. *Speech recognition* uses Android's system
@@ -30,7 +30,7 @@ can say the reply yourself.
 
 ## Install on a phone
 
-**Easiest (from a release):** download `babeltrout-vX.Y.apk` from the repository's
+**Easiest (from a release):** download `babeltrout-vX.Y-arm64-v8a.apk` (most phones) from the repository's
 [Releases](https://github.com/kwein123/babeltrout/releases) page on the phone, open it and allow the
 install. Or use [Obtainium](https://github.com/ImranR98/Obtainium) with this repo's URL to get automatic
 updates.
@@ -49,8 +49,8 @@ enabled (Settings → About phone → tap *Build number* 7 times).
 1. Grant microphone permission.
 2. With internet on, open **Setup & diagnostics → Install Assets** once. This downloads the translation
    models; after that, translation works offline.
-3. For Farsi speech output, follow [docs/FARSI_VOICES.md](docs/FARSI_VOICES.md) (install SherpaTTS plus
-   at least one Piper Farsi voice), then tap **Diagnose Farsi TTS**.
+3. For Farsi speech output: **Setup → Voice Library → Farsi**, pick a voice (about 21 MB compact).
+   See [docs/FARSI_VOICES.md](docs/FARSI_VOICES.md) for the choices.
 4. Optional: **Choose Voices** to pick a specific voice per language. It plays a sample when you choose.
 
 ## Using it
@@ -100,7 +100,12 @@ Every push also runs the unit tests via [android-ci.yml](.github/workflows/andro
 ## Credits and licenses
 
 - Translation and language ID: [Google ML Kit](https://developers.google.com/ml-kit) (on-device).
-- Farsi speech: [SherpaTTS](https://github.com/woheller69/ttsEngine) by woheller69, built on
+- Built-in voices: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0) by k2-fsa, running
+  [Piper](https://github.com/rhasspy/piper) voices from
+  [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices) as packaged by sherpa-onnx; each voice's
+  license is shown in the Voice Library and in its `MODEL_CARD`. Archives are unpacked with
+  [Apache Commons Compress](https://commons.apache.org/proper/commons-compress/) (Apache-2.0).
+- Optional Farsi speech via [SherpaTTS](https://github.com/woheller69/ttsEngine) by woheller69, built on
   [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (k2-fsa) and [Piper](https://github.com/rhasspy/piper).
   Babeltrout talks to it through Android's standard TTS interface and does not include its code.
 - `fa_IR-amir-medium.onnx` (bundled for convenience): Piper voice from

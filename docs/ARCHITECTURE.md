@@ -37,6 +37,9 @@ capability comes from the phone's own services plus Google ML Kit.
 | `ScriptHeuristics.kt` | Script detection, Farsi/Arabic and Ukrainian/Russian disambiguation, transcript scoring, `PairSourceResolver` | ✅ |
 | `TransliterationEngine.kt` | Arabic, Persian, Cyrillic and Devanagari to Latin; Latin to each script. Persian uses a lexicon plus positional vowel rules | ✅ |
 | `SpeechText.kt` | TTS chunking and speaking timeouts | ✅ |
+| `PiperVoiceCatalog.kt` | Downloadable built-in voices: URLs, sizes, pinned SHA-256 digests | ✅ |
+| `PiperVoiceStore.kt` | Download, verify, safely unpack, list and delete built-in voices | ✅ (extraction and discovery) |
+| `PiperSpeaker.kt` | Runs a Piper voice with sherpa-onnx on one worker thread, streaming audio to an `AudioTrack` | manual |
 | `MainActivity.kt` | Everything Android: UI pages, recognizers, TTS engines, ML Kit, diagnostics, export | manual |
 
 The pure-Kotlin files have no Android imports, so they run as plain JVM unit tests
@@ -72,9 +75,13 @@ recognizer) is in [REVIEW-2026.md](REVIEW-2026.md#conversation-mode).
 
 ## TTS engine routing
 
+Built-in Piper voices (`PiperSpeaker`) bypass Android's TTS system entirely: Babeltrout generates the audio
+with sherpa-onnx and plays it through `AudioTrack`. They are chosen first when pinned, and automatically for Farsi.
+
 | Output language | Preferred engine | Fallback |
 |---|---|---|
-| any language with a pinned voice | the pinned engine and voice | automatic routing below |
+| any language with a pinned voice | the pinned voice (built-in or system engine) | automatic routing below |
+| Farsi, nothing pinned | built-in Piper voice, if one is installed | SherpaTTS, then system default |
 | Farsi | SherpaTTS (`org.woheller69.ttsengine*`) | system default engine |
 | everything else | Google TTS (`com.google.android.tts`) | system default engine |
 
@@ -99,7 +106,9 @@ user's explicit export. Backup and device transfer are disabled (`data_extractio
 ## Build configuration
 
 * AGP 9.1, Gradle 9.3.1, JDK 21 toolchain, compile and target SDK 36, min SDK 26.
-* Release builds: R8 minify and resource shrinking, ABI filtered to `arm64-v8a` and `armeabi-v7a`
-  (about 75 MB down to 31 MB). Signing comes from `keystore.properties`, which is git-ignored.
+* Release builds: R8 minify and resource shrinking; one APK per CPU type (`arm64-v8a` about 47 MB,
+  `armeabi-v7a` about 33 MB). Signing comes from `keystore.properties`, which is git-ignored.
+* sherpa-onnx comes from JitPack (restricted to its group in `settings.gradle.kts`); its AAR has no
+  R8 rules, so `proguard-rules.pro` keeps `com.k2fsa.sherpa.onnx.**` for its JNI field lookups.
 * CI: `.github/workflows/android-ci.yml` (tests and a debug APK on each push) and
   `release.yml` (a signed APK on a `v*` tag).

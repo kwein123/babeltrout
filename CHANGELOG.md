@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3 (versionCode 4) — unreleased
+
+### Added
+- **Built-in voices**: Babeltrout now runs Piper voices itself (sherpa-onnx 1.13.8). No SherpaTTS needed.
+- **Voice Library** (Setup): download any of 5 Farsi voices (amir, gyro, ganji, ganji_adabi, reza_ibrahim)
+  and 3 Hindi voices, in compact (~21 MB) or full-quality (~67 MB) versions; use, switch or delete them.
+  Downloads are checked against pinned SHA-256 digests and unpacked with path-traversal and symlink protection.
+- Choose Voices lists built-in voices alongside system voices; Farsi automatically prefers a built-in voice.
+- Warns before downloading voices over mobile data.
+
+### Changed
+- Release APKs are split per CPU type (arm64-v8a ~47 MB, armeabi-v7a ~33 MB).
+- Farsi diagnostics treat SherpaTTS as optional when a built-in voice is installed.
+
 ## 1.2 (versionCode 3) — unreleased
 
 ### Added

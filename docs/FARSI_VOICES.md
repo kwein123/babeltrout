@@ -1,7 +1,28 @@
 # Farsi (Persian) voices
 
-Google TTS, the default voice engine on most Android phones, doesn't ship a Persian voice. Babeltrout
-therefore speaks Farsi through **SherpaTTS**, a free, offline Android TTS engine that runs **Piper**
+Google TTS, the default voice engine on most Android phones, doesn't ship a Persian voice. Since 1.3,
+Babeltrout **runs Farsi Piper voices itself**, so you can keep several installed and switch instantly.
+
+## Quick start (1.3 and later)
+
+1. **Setup → Voice Library → Farsi.**
+2. Tap a voice, then choose **Compact** (about 21 MB, int8-quantized) or **Full** (about 67 MB, the original
+   model). The download is verified, installed, selected, and plays a sample.
+3. Repeat for other voices. Switch any time in **Setup → Choose Voices → Farsi**, where every installed
+   built-in voice is listed, or delete a voice from the Voice Library.
+
+Voices live in the app's private storage (shared espeak-ng phonemizer data about 18 MB once, plus each
+model), and run fully offline. SherpaTTS is now optional; the older SherpaTTS instructions below still work.
+
+The Voice Library also offers three Hindi voices (pratham, priyamvada, rohan) for anyone who prefers them
+to Google's Hindi voice.
+
+**Compact or full?** Compact models are quantized to 8-bit. Most listeners hear little difference and they
+load and run a bit faster; install both of one voice and compare if you're curious.
+
+## Background: Piper and SherpaTTS
+
+Before 1.3, Babeltrout spoke Farsi through **SherpaTTS**, a free, offline Android TTS engine that runs **Piper**
 neural voices. Any Piper voice is a pair of files: `name.onnx` (the model, about 60 MB) and
 `name.onnx.json` (its config).
 
@@ -16,7 +37,7 @@ All are "medium" Piper models (22 kHz, about 60 MB each) and all run offline.
 | **ganji** | `fa_IR-ganji-medium` | [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices/tree/main/fa/fa_IR/ganji/medium) | CC0 | [Datacula](https://tts.datacula.com/) dataset. |
 | **ganji_adabi** | `fa_IR-ganji_adabi-medium` | [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices/tree/main/fa/fa_IR/ganji_adabi/medium) | CC0 | Same dataset family, literary (*adabi*) reading style. More formal. |
 | **reza_ibrahim** | `fa_IR-reza_ibrahim-medium` | [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices/tree/main/fa/fa_IR/reza_ibrahim/medium) | CC0 | Trained on Quran-reading audio (Persian plus English). Can sound recitational; also handles English words. |
-| **mana** | `fa_IR-mana-medium` | [MahtaFetrat/Mana-Persian-Piper](https://huggingface.co/MahtaFetrat/Mana-Persian-Piper) | MIT | Newest (2025). Fine-tuned from amir on the [Mana-TTS](https://huggingface.co/datasets/MahtaFetrat/Mana-TTS) dataset. Its authors report the best pronunciation when paired with ezafe-aware phonemization ([arXiv 2512.08006](https://arxiv.org/abs/2512.08006)). |
+| **mana** (not yet in the Voice Library) | `fa_IR-mana-medium` | [MahtaFetrat/Mana-Persian-Piper](https://huggingface.co/MahtaFetrat/Mana-Persian-Piper) | MIT | Newest (2025). Fine-tuned from amir on the [Mana-TTS](https://huggingface.co/datasets/MahtaFetrat/Mana-TTS) dataset. Its authors report the best pronunciation when paired with ezafe-aware phonemization ([arXiv 2512.08006](https://arxiv.org/abs/2512.08006)). |
 
 The first five are also packaged for sherpa-onnx as `vits-piper-fa_IR-<name>-medium`
 ([sherpa-onnx TTS model list](https://k2-fsa.github.io/sherpa/onnx/tts/all/Persian/index.html)).
