@@ -106,6 +106,8 @@ Every push also runs the unit tests via [android-ci.yml](.github/workflows/andro
   [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices) as packaged by sherpa-onnx; each voice's
   license is shown in the Voice Library and in its `MODEL_CARD`. Archives are unpacked with
   [Apache Commons Compress](https://commons.apache.org/proper/commons-compress/) (Apache-2.0).
+- Hands-free conversation: [Silero VAD](https://github.com/snakers4/silero-vad) by Silero Team (MIT),
+  bundled as `app/src/main/assets/silero_vad.onnx` from sherpa-onnx's `asr-models` release, run through sherpa-onnx.
 - Optional Farsi speech via [SherpaTTS](https://github.com/woheller69/ttsEngine) by woheller69, built on
   [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (k2-fsa) and [Piper](https://github.com/rhasspy/piper).
   Babeltrout talks to it through Android's standard TTS interface and does not include its code.
