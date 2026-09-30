@@ -1350,7 +1350,19 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         }
 
         binding.btnInstallAssets.setOnClickListener {
-            installMissingAssets(manual = true)
+            if (isOnMeteredNetwork()) {
+                AlertDialog.Builder(this)
+                    .setTitle("Use mobile data?")
+                    .setMessage(
+                        "Install Assets downloads translation models, voices and offline speech recognition " +
+                            "for every language, which can be several hundred MB, and you're not on Wi-Fi."
+                    )
+                    .setPositiveButton("Download") { _, _ -> installMissingAssets(manual = true) }
+                    .setNegativeButton("Wait for Wi-Fi", null)
+                    .show()
+            } else {
+                installMissingAssets(manual = true)
+            }
         }
 
         binding.btnCheckAssets.setOnClickListener {
@@ -2308,6 +2320,9 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
                 }
             }
 
+            // Only when the user asks: voices and speech packs can be large (first run gets models only).
+            val packSummary = if (manual) installSystemLanguagePacks() else ""
+
             binding.btnInstallAssets.isEnabled = true
             if (!isCheckingAssets) {
                 binding.btnCheckAssets.isEnabled = true
@@ -2316,16 +2331,73 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
 
             if (failures.isEmpty()) {
                 prefs.edit().putBoolean("assets_ready", true).apply()
-                setStatus("All offline translation assets are installed.")
+                setStatus("All offline translation assets are installed. $packSummary".trim())
             } else {
                 prefs.edit().putBoolean("assets_ready", false).apply()
                 val summary = failures.firstOrNull() ?: "unknown issue"
-                setStatus("Asset install partial: $summary", isError = true)
+                setStatus("Asset install partial: $summary. $packSummary".trim(), isError = true)
             }
 
             checkDownloadedAssets(manual = false)
         }
     }
+
+    /**
+     * Downloads Google's offline voice and (Android 13+) the on-device speech recognition pack for every
+     * language, so first use doesn't pause. Returns a summary for the status line.
+     */
+    private suspend fun installSystemLanguagePacks(): String {
+        val parts = mutableListOf<String>()
+
+        val tts = resolveGoogleTtsPackageName()?.let { createTtsForProbe(it) }
+        if (tts == null) {
+            parts += "Voices: Google speech engine not found."
+        } else {
+            try {
+                val outcomes = languageOptions.mapIndexed { index, option ->
+                    setStatus("Installing voices ${index + 1}/${languageOptions.size}: ${option.label}")
+                    option to SystemLanguagePacks.prefetchVoice(tts, option, cacheDir)
+                }
+                parts += "Voices: ${describePackOutcomes(outcomes)}."
+            } finally {
+                tts.stop()
+                tts.shutdown()
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val packs = SystemLanguagePacks.RecognitionPacks.create(this)
+            if (packs == null) {
+                parts += "Offline speech recognition isn't available on this phone."
+            } else {
+                try {
+                    val outcomes = languageOptions.mapIndexed { index, option ->
+                        setStatus("Installing speech recognition ${index + 1}/${languageOptions.size}: ${option.label}")
+                        option to packs.ensure(option)
+                    }
+                    parts += "Offline speech recognition: ${describePackOutcomes(outcomes)}."
+                } finally {
+                    packs.destroy()
+                }
+            }
+        }
+        return parts.joinToString(" ")
+    }
+
+    private fun describePackOutcomes(outcomes: List<Pair<LanguageOption, SystemLanguagePacks.Outcome>>): String =
+        outcomes.groupBy({ it.second }, { it.first.label })
+            .toSortedMap()
+            .entries
+            .joinToString("; ") { (outcome, labels) ->
+                val heading = when (outcome) {
+                    SystemLanguagePacks.Outcome.READY -> "ready"
+                    SystemLanguagePacks.Outcome.DOWNLOADED -> "downloaded"
+                    SystemLanguagePacks.Outcome.DOWNLOADING -> "still downloading"
+                    SystemLanguagePacks.Outcome.NOT_OFFERED -> "not offered"
+                    SystemLanguagePacks.Outcome.FAILED -> "failed"
+                }
+                "$heading ${labels.joinToString(", ")}"
+            }
 
     private fun checkDownloadedAssets(manual: Boolean) {
         if (isCheckingAssets) {
