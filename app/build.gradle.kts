@@ -126,4 +126,24 @@ dependencies {
     implementation("org.apache.commons:commons-compress:1.28.0")
 
     testImplementation("junit:junit:4.13.2")
+
+    // Android Lint's own runtime (build tool only, not in the APK). The root build.gradle.kts pins don't
+    // reach it, and AGP 9.4.1's lint still pulls in versions with known CVEs.
+    constraints {
+        "androidLintTool"("org.bouncycastle:bcprov-jdk18on:1.86") {
+            because("CVE fixes in 1.84 and 1.85 (Dependabot #21, #53, #54); lint has 1.80.2")
+        }
+        "androidLintTool"("org.bouncycastle:bcpkix-jdk18on:1.86") {
+            because("CVE fixed in 1.84 (Dependabot #20); kept in step with bcprov")
+        }
+        "androidLintTool"("org.bouncycastle:bcutil-jdk18on:1.86") {
+            because("kept in step with bcprov and bcpkix")
+        }
+        "androidLintTool"("org.apache.commons:commons-lang3:3.18.0") {
+            because("CVE fixed in 3.18.0 (Dependabot #10); lint has 3.16.0")
+        }
+        "androidLintTool"("org.apache.httpcomponents:httpclient:4.5.14") {
+            because("CVE fixed in 4.5.13 (Dependabot #1); lint asks for 4.5.6")
+        }
+    }
 }
