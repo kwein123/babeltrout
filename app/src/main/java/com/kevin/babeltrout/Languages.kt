@@ -31,6 +31,7 @@ object Languages {
         LanguageOption("hi", "Hindi", "hi-IN", Script.DEVANAGARI, "नमस्ते, यह आवाज़ का परीक्षण है।"),
         LanguageOption("fr", "French", "fr-FR", Script.LATIN, "Bonjour, ceci est un test de voix."),
         LanguageOption("es", "Spanish", "es-ES", Script.LATIN, "Hola, esta es una prueba de voz."),
+        LanguageOption("de", "German", "de-DE", Script.LATIN, "Hallo, das ist ein Sprachtest."),
         LanguageOption("en", "English", "en-US", Script.LATIN, "Hello, this is a voice test."),
     )
 
@@ -47,6 +48,7 @@ object Languages {
         "ara" to "ar", "arb" to "ar",
         "fra" to "fr", "fre" to "fr",
         "spa" to "es",
+        "deu" to "de", "ger" to "de",
         "hin" to "hi",
     )
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **German** (speech, translation, voice), with a hold button next to Hindi. Tap Install assets once to download
+  its translation model (~30 MB).
+- Language detection recognizes German marker words and ä/ö/ü/ß. "ü" no longer counts as a French clue.
+
 ## 1.5 (versionCode 6) — 2026-09-30
 
 ### Build

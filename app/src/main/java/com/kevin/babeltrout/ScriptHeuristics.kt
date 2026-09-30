@@ -46,6 +46,13 @@ object ScriptHeuristics {
     private val spanishWords = listOf(" el ", " la ", " de ", " que ", " y ", " por ", " para ", " con ", " está ", " es ", " dónde ")
     private val frenchWords = listOf(" le ", " la ", " les ", " des ", " est ", " pour ", " avec ", " une ", " où ", " je ", " vous ")
 
+    // Avoid words shared with English ("was", "so", "in") or French ("du"); Spanish "es" is shared, so
+    // German still wins "es ist gut" on count.
+    private val germanWords = listOf(
+        " ich ", " und ", " ist ", " nicht ", " das ", " der ", " die ", " ein ", " eine ", " mit ", " für ",
+        " wie ", " wo ", " ja ", " nein ", " bitte ", " danke ", " gut ", " sie ", " wir ", " sind ", " hallo ",
+    )
+
     // "la", "de" and accented vowels are shared, so count evidence rather than stopping at the first hit.
     private fun spanishEvidence(lowered: String): Int {
         val padded = " ${lowered.replace(Regex("[¿?¡!.,]"), " ")} "
@@ -54,12 +61,21 @@ object ScriptHeuristics {
 
     private fun frenchEvidence(lowered: String): Int {
         val padded = " ${lowered.replace(Regex("[?!.,]"), " ")} "
-        return frenchWords.count { padded.contains(it) } + lowered.count { it in "àâçèêëîïôùûü" } * 2
+        // No "ü": it is common in German ("für", "über") and nearly absent from French.
+        return frenchWords.count { padded.contains(it) } + lowered.count { it in "àâçèêëîïôùû" } * 2
+    }
+
+    // "ä", "ö" and "ß" are German-only here; "ü" also appears in Turkish/Spanish loanwords, so it counts less.
+    private fun germanEvidence(lowered: String): Int {
+        val padded = " ${lowered.replace(Regex("[?!.,]"), " ")} "
+        return germanWords.count { padded.contains(it) } + lowered.count { it in "äöß" } * 2 + lowered.count { it == 'ü' }
     }
 
     fun looksSpanish(lowered: String): Boolean = spanishEvidence(lowered) > 0
 
     fun looksFrench(lowered: String): Boolean = frenchEvidence(lowered) > 0
+
+    fun looksGerman(lowered: String): Boolean = germanEvidence(lowered) > 0
 
     private val englishMarkers = listOf(
         " the ", " and ", " is ", " are ", " to ", " of ",
@@ -104,6 +120,7 @@ object ScriptHeuristics {
             "hi" -> if (containsDevanagari(transcript)) 3 else 0
             "fr" -> if (looksFrench(lowered)) 2 else 0
             "es" -> if (looksSpanish(lowered)) 2 else 0
+            "de" -> if (looksGerman(lowered)) 2 else 0
             "en" -> if (looksEnglish(lowered)) 2 else 0
             else -> 0
         }
@@ -123,8 +140,10 @@ object ScriptHeuristics {
         val lowered = transcript.lowercase(Locale.US)
         val spanish = spanishEvidence(lowered)
         val french = frenchEvidence(lowered)
+        val german = germanEvidence(lowered)
         return when {
-            spanish == 0 && french == 0 -> "en"
+            spanish == 0 && french == 0 && german == 0 -> "en"
+            german > spanish && german > french -> "de"
             french > spanish -> "fr"
             else -> "es"
         }

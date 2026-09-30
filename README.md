@@ -1,7 +1,7 @@
 # Babeltrout
 
 An Android speech-to-speech translator built for real conversations in **English, Farsi, Ukrainian,
-Russian, Arabic, Hindi, French and Spanish**. Hold a button and speak; Babeltrout transcribes, translates
+Russian, Arabic, Hindi, French, Spanish and German**. Hold a button and speak; Babeltrout transcribes, translates
 on-device, speaks the result aloud and shows a pronunciation line written in *your* alphabet, so you
 can say the reply yourself.
 

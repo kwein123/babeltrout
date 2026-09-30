@@ -37,6 +37,20 @@ class ScriptHeuristicsTest {
         assertEquals("es", ScriptHeuristics.guessFromScript("¿dónde está el baño?"))
         assertEquals("fr", ScriptHeuristics.guessFromScript("où est la gare"))
         assertEquals("en", ScriptHeuristics.guessFromScript("where is the station"))
+        assertEquals("de", ScriptHeuristics.guessFromScript("Wo ist der Bahnhof?"))
+    }
+
+    @Test
+    fun `german is told apart from spanish and french`() {
+        // "es" is also a Spanish marker; German still wins on count.
+        assertEquals("de", ScriptHeuristics.guessFromScript("es ist gut"))
+        // Umlauts and ß are German evidence on their own.
+        assertEquals("de", ScriptHeuristics.guessFromScript("Schön, Grüße"))
+        // "ü" used to count as French.
+        assertFalse(ScriptHeuristics.looksFrench("für über"))
+        assertTrue(ScriptHeuristics.looksGerman("für über"))
+        assertEquals(2, ScriptHeuristics.scoreLanguage("Ich bin müde", "de"))
+        assertEquals(0, ScriptHeuristics.scoreLanguage("where is the station", "de"))
     }
 
     @Test

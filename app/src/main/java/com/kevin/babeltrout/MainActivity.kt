@@ -661,6 +661,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         bindHoldButton(binding.btnHoldFr, "fr")
         bindHoldButton(binding.btnHoldEs, "es")
         bindHoldButton(binding.btnHoldHi, "hi")
+        bindHoldButton(binding.btnHoldDe, "de")
     }
 
     private fun bindHoldButton(button: Button, sourceCode: String?) {

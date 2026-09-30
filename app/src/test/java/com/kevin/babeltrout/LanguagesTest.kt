@@ -45,6 +45,16 @@ class LanguagesTest {
     }
 
     @Test
+    fun `german is supported`() {
+        val german = Languages.option("de-DE")!!
+        assertEquals("German", german.label)
+        assertEquals(Script.LATIN, german.script)
+        assertEquals("de", Languages.normalizeCode("deu"))
+        assertEquals("de", Languages.normalizeCode("ger"))
+        assertFalse(Languages.isRtl("de"))
+    }
+
+    @Test
     fun `rtl only for arabic script`() {
         assertTrue(Languages.isRtl("fa"))
         assertTrue(Languages.isRtl("ar"))
