@@ -101,6 +101,9 @@ Every push also runs the unit tests via [android-ci.yml](.github/workflows/andro
 ## Credits and licenses
 
 - Translation and language ID: [Google ML Kit](https://developers.google.com/ml-kit) (on-device).
+  ML Kit's networking libraries, [OkHttp](https://github.com/square/okhttp) and
+  [Okio](https://github.com/square/okio) by Square (Apache-2.0), are pinned to patched versions in
+  `app/build.gradle.kts`.
 - Built-in voices: [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0) by k2-fsa, running
   [Piper](https://github.com/rhasspy/piper) voices from
   [rhasspy/piper-voices](https://huggingface.co/rhasspy/piper-voices) as packaged by sherpa-onnx; each voice's

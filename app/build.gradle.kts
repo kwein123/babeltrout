@@ -107,6 +107,18 @@ dependencies {
     implementation("com.google.mlkit:translate:17.0.3")
     implementation("com.google.mlkit:language-id:17.0.6")
 
+    // ML Kit translate 17.0.3 (the latest release) still pulls in okhttp 3.0.0 and okio 1.6.0. Force
+    // patched versions. OkHttp 4.12 keeps the okhttp3 package and the 3.x Java API; every OkHttp method
+    // ML Kit calls was checked present with the same signature in 4.12.0 on 2026-09-29.
+    constraints {
+        implementation("com.squareup.okhttp3:okhttp:4.12.0") {
+            because("CVE-2021-0341 (fixed in 4.9.2) and CVE-2016-2402 (fixed in 3.1.2) in okhttp 3.0.0 from ML Kit translate")
+        }
+        implementation("com.squareup.okio:okio:3.6.0") {
+            because("CVE-2023-3635 in okio 1.6.0 from ML Kit translate (fixed in 1.17.6 / 3.4.0); 3.6.0 matches okhttp 4.12.0")
+        }
+    }
+
     // Built-in Piper voices: sherpa-onnx runs the models; commons-compress unpacks the .tar.bz2 downloads.
     // Android-only module. The JitPack AAR was checked byte-identical to k2-fsa's GitHub release
     // asset sherpa-onnx-1.13.8.aar (sha256 633c2432...bd96) on 2026-09-28; re-check when upgrading.
