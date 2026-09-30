@@ -132,6 +132,9 @@ Every push also runs the unit tests via [android-ci.yml](.github/workflows/andro
 
 ## Credits and licenses
 
+Babeltrout's own code is released under the [MIT License](LICENSE). The components below keep their own
+licenses.
+
 - Translation and language ID: [Google ML Kit](https://developers.google.com/ml-kit) (on-device).
   ML Kit's networking libraries, [OkHttp](https://github.com/square/okhttp) and
   [Okio](https://github.com/square/okio) by Square (Apache-2.0), are pinned to patched versions in
