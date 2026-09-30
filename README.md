@@ -6,6 +6,36 @@ Ukrainian, Russian, Arabic, Hindi, French, Spanish and German**, and you can rem
 on-device, speaks the result aloud and shows a pronunciation line written in *your* alphabet, so you
 can say the reply yourself.
 
+## How Babeltrout differs
+
+Compared with Google Translate, Microsoft Translator, DeepL, and the translators built into Pixel and Samsung
+phones (as of September 2026), Babeltrout offers:
+
+- **Pronunciation in *your* alphabet.** Every translation into a non-Latin script comes with a line showing how
+  to say it, written in the reader's own script: Latin, Cyrillic, Persian/Arabic or Devanagari. Other apps show
+  Latin-letter romanization at most. Real output for one Farsi sentence:
+
+  | | |
+  |---|---|
+  | Translation | سلام، حال شما چطور است؟ |
+  | For an English speaker | salaam, haal shomaa chetor ast? |
+  | For a Ukrainian speaker | салам, гал шома четор аст? |
+
+- **Offline Farsi voices.** Five natural-sounding Farsi voices (and three Hindi ones) download inside the app
+  and run without internet. Google's Android speech engine has no Farsi voice at all. You can pick the voice
+  for each language from every speech engine on the phone.
+- **Hands-free conversation that tells look-alike languages apart.** No buttons, beeps or time limit. Each turn
+  is recognized in both languages at once, and Babeltrout picks the real one, separating Farsi from Arabic and
+  Ukrainian from Russian, even for one-word replies.
+- **Private by design.** Translation always runs on the phone. No account, no ads, no analytics of its own;
+  history stays in memory and out of backups. You choose your languages (25 available), and updates come
+  straight from GitHub.
+
+**Where the big apps are ahead:** far more languages (100+), more fluent cloud translation, camera and typed
+input, and iPhone versions.
+
+## Features
+
 - **Push-to-talk**: hold the button for the language you're speaking.
 - **Your languages**: tap **✎ Edit** above the buttons to remove a language (and its downloads) or add one.
 - **Conversation mode**: two people, two languages, one phone. Each phrase is routed to the other language.
