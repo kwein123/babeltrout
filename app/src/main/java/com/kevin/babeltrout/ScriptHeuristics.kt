@@ -166,18 +166,6 @@ object ScriptHeuristics {
         return candidates.first()
     }
 
-    fun scoreAutoCandidate(transcript: String, sourceCode: String, index: Int): Int {
-        val script = Languages.script(sourceCode)
-        var score = scoreLanguage(transcript, sourceCode) * 4
-        score += when {
-            script != Script.LATIN -> if (hasScript(transcript, script)) 6 else -2
-            else -> if (!containsNonLatinScript(transcript)) 2 else 0
-        }
-        score += minOf(transcript.count { it.isLetter() } / 6, 4)
-        score -= index
-        return score
-    }
-
     fun scoreForcedCandidate(transcript: String, sourceCode: String): Int {
         val script = Languages.script(sourceCode)
         var score = scoreLanguage(transcript, sourceCode) * 5

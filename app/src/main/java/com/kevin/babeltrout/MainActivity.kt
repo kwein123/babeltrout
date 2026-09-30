@@ -218,7 +218,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         }
 
         val button = buttonId?.let { findViewById<Button>(it) }
-        if (button != null) {
+        if (button != null && sourceCode != null) {
             startListening(button, sourceCode)
             return@registerForActivityResult
         }
@@ -652,7 +652,6 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     }
 
     private fun setupHoldButtons() {
-        bindHoldButton(binding.btnHoldAuto, null)
         bindHoldButton(binding.btnHoldEn, "en")
         bindHoldButton(binding.btnHoldFa, "fa")
         bindHoldButton(binding.btnHoldUk, "uk")
@@ -664,7 +663,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         bindHoldButton(binding.btnHoldDe, "de")
     }
 
-    private fun bindHoldButton(button: Button, sourceCode: String?) {
+    private fun bindHoldButton(button: Button, sourceCode: String) {
         button.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -682,7 +681,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         }
     }
 
-    private fun onHoldDown(button: Button, sourceCode: String?) {
+    private fun onHoldDown(button: Button, sourceCode: String) {
         if (isConverseActive) {
             setStatus("Conversation mode is active. Turn off Conversation Mic before push-to-talk.")
             return
@@ -719,7 +718,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         stopListening()
     }
 
-    private fun startListening(button: Button, sourceCode: String?) {
+    private fun startListening(button: Button, sourceCode: String) {
         if (isListening || isProcessing) {
             return
         }
@@ -733,10 +732,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         button.tag = button.text.toString()
         button.text = "Release to Process"
 
-        setStatus(
-            if (sourceCode == null) "Listening (auto detect)..."
-            else "Listening (${labelForCode(sourceCode)})..."
-        )
+        setStatus("Listening (${labelForCode(sourceCode)})...")
 
         runCatching {
             speechRecognizer.startListening(recognitionIntent)
@@ -766,32 +762,16 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         runCatching { speechRecognizer.stopListening() }
     }
 
-    private fun buildRecognitionIntent(sourceCode: String?): Intent {
+    private fun buildRecognitionIntent(sourceCode: String): Intent {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOfflineRecognition)
         intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
         intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
 
-        if (sourceCode != null) {
-            val recognitionTag = recognitionTagForCode(sourceCode)
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionTag)
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, recognitionTag)
-        } else {
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "und")
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "und")
-            intent.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
-            intent.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_QUICK_RESPONSE)
-            val allowedTags = ArrayList(languageOptions.map { it.localeTag })
-            intent.putStringArrayListExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES,
-                allowedTags
-            )
-            intent.putStringArrayListExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES,
-                allowedTags
-            )
-        }
+        val recognitionTag = recognitionTagForCode(sourceCode)
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionTag)
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, recognitionTag)
 
         return intent
     }
@@ -2903,13 +2883,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
                 appendOutput(sourceCode, transcript, targetCode, targetText, transliteration)
                 speakTarget(targetText, targetCode)
 
-                val sourceInfo = if (sourceHint == null) {
-                    "Detected ${labelForCode(sourceCode)}"
-                } else {
-                    "Used ${labelForCode(sourceCode)}"
-                }
-
-                setStatus("$sourceInfo, translated to ${labelForCode(targetCode)} (${route.joinToString(" -> ")})")
+                setStatus("Used ${labelForCode(sourceCode)}, translated to ${labelForCode(targetCode)} (${route.joinToString(" -> ")})")
             }.onFailure { error ->
                 setStatus("Processing failed: ${error.message}", isError = true)
             }
@@ -2928,32 +2902,10 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             error("No speech detected.")
         }
 
-        val normalizedHint = normalizeCode(sourceHint)
-        if (normalizedHint in supportedCodes) {
-            val transcript = pickBestTranscriptForForcedSource(candidates, normalizedHint)
-            return transcript to normalizedHint
-        }
-
-        return pickBestAutoTranscript(candidates)
-    }
-
-    private suspend fun pickBestAutoTranscript(candidates: List<String>): Pair<String, String> {
-        var bestTranscript = candidates.first()
-        var bestSource = detectSourceLanguage(bestTranscript)
-        var bestScore = ScriptHeuristics.scoreAutoCandidate(bestTranscript, bestSource, 0)
-
-        for (index in 1 until candidates.size) {
-            val candidate = candidates[index]
-            val detectedSource = detectSourceLanguage(candidate)
-            val candidateScore = ScriptHeuristics.scoreAutoCandidate(candidate, detectedSource, index)
-            if (candidateScore > bestScore) {
-                bestTranscript = candidate
-                bestSource = detectedSource
-                bestScore = candidateScore
-            }
-        }
-
-        return bestTranscript to bestSource
+        // Every hold button names its language (Google's recognizer can't auto-detect one online).
+        val sourceCode = normalizeCode(sourceHint).takeIf { it in supportedCodes }
+            ?: error("No source language selected.")
+        return pickBestTranscriptForForcedSource(candidates, sourceCode) to sourceCode
     }
 
     private fun pickBestTranscriptForForcedSource(candidates: List<String>, sourceCode: String): String =

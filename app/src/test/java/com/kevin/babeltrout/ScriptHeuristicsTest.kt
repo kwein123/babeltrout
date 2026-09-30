@@ -73,11 +73,4 @@ class ScriptHeuristicsTest {
         val candidates = listOf("namaste", "नमस्ते")
         assertEquals("नमस्ते", ScriptHeuristics.pickBestForcedTranscript(candidates, "hi"))
     }
-
-    @Test
-    fun `auto candidate score rewards script match`() {
-        val farsi = ScriptHeuristics.scoreAutoCandidate("سلام چطوری", "fa", 0)
-        val wrong = ScriptHeuristics.scoreAutoCandidate("salaam", "fa", 0)
-        assertTrue(farsi > wrong)
-    }
 }
