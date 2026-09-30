@@ -748,17 +748,20 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             .show()
     }
 
+    /**
+     * Adds [option]'s button and downloads what Install Assets would for it: the translation model, and
+     * (not on mobile data, since they can be large) Google's voice and the offline speech pack. Without
+     * the speech pack, the first recognition in a new language goes online and is slow.
+     */
     private fun addLanguage(option: LanguageOption) {
         saveLanguageSelection(languageSelection.add(option.code))
         setStatus("Added ${option.label}. Downloading its translation model...")
         appScope.launch {
-            runCatching { ensureLanguageModel(option.code) }
-                .onSuccess {
-                    setStatus("Added ${option.label}. Tap Install Assets for its voice and offline speech pack.")
-                }
-                .onFailure { error ->
-                    setStatus("Added ${option.label}, but its translation model didn't download: ${error.message}", isError = true)
-                }
+            val model = runCatching { ensureLanguageModel(option.code) }
+            val packs = if (isOnMeteredNetwork()) null else installSystemLanguagePacks(listOf(option))
+            val modelNote = model.exceptionOrNull()?.let { "Its translation model didn't download: ${it.message}. " }.orEmpty()
+            val packNote = packs ?: "On mobile data, so its voice and offline speech pack weren't downloaded; tap Install Assets on Wi-Fi."
+            setStatus("Added ${option.label}. $modelNote$packNote", isError = model.isFailure)
             checkDownloadedAssets(manual = false)
         }
     }
@@ -2472,10 +2475,11 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     }
 
     /**
-     * Downloads Google's offline voice and (Android 13+) the on-device speech recognition pack for every
-     * language, so first use doesn't pause. Returns a summary for the status line.
+     * Downloads Google's offline voice and (Android 13+) the on-device speech recognition pack for
+     * [options] (default: all of the user's languages), so first use doesn't pause. Returns a summary
+     * for the status line.
      */
-    private suspend fun installSystemLanguagePacks(): String {
+    private suspend fun installSystemLanguagePacks(options: List<LanguageOption> = languageOptions): String {
         val parts = mutableListOf<String>()
 
         val tts = resolveGoogleTtsPackageName()?.let { createTtsForProbe(it) }
@@ -2483,8 +2487,8 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             parts += "Voices: Google speech engine not found."
         } else {
             try {
-                val outcomes = languageOptions.mapIndexed { index, option ->
-                    setStatus("Installing voices ${index + 1}/${languageOptions.size}: ${option.label}")
+                val outcomes = options.mapIndexed { index, option ->
+                    setStatus("Installing voices ${index + 1}/${options.size}: ${option.label}")
                     option to SystemLanguagePacks.prefetchVoice(tts, option, cacheDir)
                 }
                 parts += "Voices: ${describePackOutcomes(outcomes)}."
@@ -2500,8 +2504,8 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
                 parts += "Offline speech recognition isn't available on this phone."
             } else {
                 try {
-                    val outcomes = languageOptions.mapIndexed { index, option ->
-                        setStatus("Installing speech recognition ${index + 1}/${languageOptions.size}: ${option.label}")
+                    val outcomes = options.mapIndexed { index, option ->
+                        setStatus("Installing speech recognition ${index + 1}/${options.size}: ${option.label}")
                         option to packs.ensure(option)
                     }
                     parts += "Offline speech recognition: ${describePackOutcomes(outcomes)}."
