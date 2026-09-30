@@ -3,6 +3,11 @@
 ## Unreleased
 
 ### Added
+- **Choose your languages.** Tap **✎ Edit** above the push-to-talk buttons: tap a language to remove it (this
+  deletes its translation model and built-in voices), or **+ Add language** to add one of 16 more: Catalan,
+  Croatian, Czech, Danish, Dutch, Finnish, Hungarian, Indonesian, Italian, Polish, Portuguese, Romanian,
+  Slovak, Swedish, Turkish or Vietnamese. English always stays (all translations go through it), and at
+  least two languages remain. The menus and Install Assets follow your list.
 - **German** (speech, translation, voice), with a hold button next to Hindi. Tap Install assets once to download
   its translation model (~30 MB).
 - Language detection recognizes German marker words and ä/ö/ü/ß. "ü" no longer counts as a French clue.

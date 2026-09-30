@@ -29,6 +29,7 @@ import android.util.TypedValue
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
@@ -136,10 +137,10 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     private val preferOfflineRecognition = false
     private var lastKnownDefaultTtsEngine = ""
 
-    private val languageOptions = Languages.all
+    private val languageOptions get() = languageSelection.options
 
     private val supportedCodes = Languages.codes
-    private val requiredModelCodes = Languages.codes
+    private val requiredModelCodes get() = languageSelection.codes.toSet()
 
     private val modelDownloadConditions = DownloadConditions.Builder().build()
 
@@ -158,6 +159,9 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     private var activeSourceCode: String? = null
     private var activeButton: Button? = null
     private var isListening = false
+    /** The user's languages; loaded in onCreate (prefs need the Context). */
+    private var languageSelection = LanguageSelection.defaults
+    private var isEditingLanguages = false
     private var isProcessing = false
     private var pendingPermissionSourceCode: String? = null
     private var pendingPermissionButtonId: Int? = null
@@ -465,10 +469,12 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         lastKnownDefaultTtsEngine = currentDefaultTtsEngine()
         initTextToSpeech()
 
+        languageSelection = LanguageSelection.parse(prefs.getString(PREF_LANGUAGES, null))
         setupTargetSpinner()
         setupConversePage()
         setupSpeechRateControl()
         setupOutputSizeControl()
+        setupStatusText()
         setupHoldButtons()
         setupUtilityButtons()
         setupBackHandling()
@@ -651,27 +657,191 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         })
     }
 
+    /** Tapping the status box shows the full message when it's too long for the box's three lines. */
+    private fun setupStatusText() {
+        binding.statusText.setOnClickListener {
+            val layout = binding.statusText.layout ?: return@setOnClickListener
+            val truncated = layout.lineCount > 0 && layout.getEllipsisCount(layout.lineCount - 1) > 0
+            if (!truncated) return@setOnClickListener
+            AlertDialog.Builder(this)
+                .setMessage(binding.statusText.text)
+                .setPositiveButton("OK", null)
+                .show()
+        }
+    }
+
     private fun setupHoldButtons() {
-        bindHoldButton(binding.btnHoldEn, "en")
-        bindHoldButton(binding.btnHoldFa, "fa")
-        bindHoldButton(binding.btnHoldUk, "uk")
-        bindHoldButton(binding.btnHoldRu, "ru")
-        bindHoldButton(binding.btnHoldAr, "ar")
-        bindHoldButton(binding.btnHoldFr, "fr")
-        bindHoldButton(binding.btnHoldEs, "es")
-        bindHoldButton(binding.btnHoldHi, "hi")
-        bindHoldButton(binding.btnHoldDe, "de")
+        binding.btnEditLanguages.setOnClickListener {
+            if (!isEditingLanguages && (isListening || isProcessing)) return@setOnClickListener
+            isEditingLanguages = !isEditingLanguages
+            renderHoldButtons()
+        }
+        renderHoldButtons()
+    }
+
+    /**
+     * Builds the push-to-talk grid from [languageSelection], two buttons per row. In edit mode the same
+     * buttons remove their language when tapped, and a final "+ Add language" button opens the picker.
+     */
+    private fun renderHoldButtons() {
+        val grid = binding.holdButtonGrid
+        grid.removeAllViews()
+        binding.btnEditLanguages.text = if (isEditingLanguages) "Done" else "✎ Edit"
+        binding.holdButtonsHeader.text =
+            if (isEditingLanguages) "Tap a language to remove it" else "Hold one source button while speaking"
+
+        val buttons = languageSelection.options.map { option -> languageButton(option) }.toMutableList()
+        if (isEditingLanguages) {
+            buttons += newHoldButton().apply {
+                text = "+ Add language"
+                isEnabled = languageSelection.addable.isNotEmpty()
+                setOnClickListener { showAddLanguageDialog() }
+            }
+        }
+
+        buttons.chunked(2).forEachIndexed { rowIndex, pair ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { if (rowIndex > 0) topMargin = dp(8) }
+            }
+            pair.forEachIndexed { index, button ->
+                (button.layoutParams as LinearLayout.LayoutParams).marginStart = if (index > 0) dp(8) else 0
+                row.addView(button)
+            }
+            grid.addView(row)
+        }
+    }
+
+    private fun languageButton(option: LanguageOption): Button = newHoldButton().apply {
+        id = View.generateViewId()
+        if (!isEditingLanguages) {
+            text = option.label
+            bindHoldButton(this, option.code)
+            return@apply
+        }
+        val removable = languageSelection.canRemove(option.code)
+        text = if (removable) "${option.label}  ✕" else option.label
+        backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.secondary_button)
+        alpha = if (removable) 1f else 0.5f
+        setOnClickListener {
+            if (removable) {
+                confirmRemoveLanguage(option)
+            } else if (option.code == Languages.PIVOT_CODE) {
+                setStatus("English can't be removed: every translation goes through it.")
+            } else {
+                setStatus("Keep at least ${LanguageSelection.MIN_SIZE} languages so conversation mode has a pair.")
+            }
+        }
+    }
+
+    private fun newHoldButton(): Button =
+        layoutInflater.inflate(R.layout.item_hold_button, binding.holdButtonGrid, false) as Button
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun saveLanguageSelection(selection: LanguageSelection) {
+        languageSelection = selection
+        prefs.edit().putString(PREF_LANGUAGES, selection.serialize()).apply()
+        renderHoldButtons()
+        // Spinners re-read their saved choice; one pointing at a removed language falls back to the default.
+        setupTargetSpinner()
+        bindLanguageSpinner(binding.converseLangASpinner, PREF_CONVERSE_A, "en")
+        bindLanguageSpinner(binding.converseLangBSpinner, PREF_CONVERSE_B, "fa")
+    }
+
+    private fun showAddLanguageDialog() {
+        val addable = languageSelection.addable
+        if (addable.isEmpty()) return
+        AlertDialog.Builder(this)
+            .setTitle("Add a language")
+            .setItems(addable.map { it.label }.toTypedArray()) { _, which -> addLanguage(addable[which]) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /**
+     * Adds [option]'s button and downloads what Install Assets would for it: the translation model, and
+     * (not on mobile data, since they can be large) Google's voice and the offline speech pack. Without
+     * the speech pack, the first recognition in a new language goes online and is slow.
+     */
+    private fun addLanguage(option: LanguageOption) {
+        saveLanguageSelection(languageSelection.add(option.code))
+        setStatus("Added ${option.label}. Downloading its translation model...")
+        appScope.launch {
+            val model = runCatching { ensureLanguageModel(option.code) }
+            val packs = if (isOnMeteredNetwork()) null else installSystemLanguagePacks(listOf(option))
+            val modelNote = model.exceptionOrNull()?.let { "Its translation model didn't download: ${it.message}. " }.orEmpty()
+            val packNote = packs ?: "On mobile data, so its voice and offline speech pack weren't downloaded; tap Install Assets on Wi-Fi."
+            setStatus("Added ${option.label}. $modelNote$packNote", isError = model.isFailure)
+            checkDownloadedAssets(manual = false)
+        }
+    }
+
+    private fun confirmRemoveLanguage(option: LanguageOption) {
+        val piperVoices = piperStore.installed(option.code)
+        val details = buildList {
+            add("This deletes its translation model.")
+            if (piperVoices.isNotEmpty()) {
+                add("It also deletes ${piperVoices.size} built-in ${option.label} voice${if (piperVoices.size == 1) "" else "s"}.")
+            }
+            add("Google's ${option.label} voice and offline speech pack belong to Android; remove them in Android's settings if you want the space back.")
+            add("You can add ${option.label} again any time.")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Remove ${option.label}?")
+            .setMessage(details.joinToString("\n\n"))
+            .setPositiveButton("Remove") { _, _ -> removeLanguage(option) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Removes [option]'s button and the downloads only it uses (its ML Kit model and Piper voices). */
+    private fun removeLanguage(option: LanguageOption) {
+        val code = option.code
+        saveLanguageSelection(languageSelection.remove(code))
+        prefs.edit().remove(PREF_VOICE_PREFIX + code).apply()
+        availableTtsByCode.remove(code)
+        synchronized(translatorCache) {
+            translatorCache.keys.filter { code in it.split("->") }.forEach { translatorCache.remove(it)?.close() }
+        }
+        synchronized(readyTranslatorPairs) { readyTranslatorPairs.removeAll { code in it.split("->") } }
+
+        val piperVoices = piperStore.installed(code)
+        if (piperVoices.isNotEmpty()) piperSpeaker.stop()
+        appScope.launch {
+            val problems = mutableListOf<String>()
+            runCatching { withContext(Dispatchers.IO) { piperVoices.forEach { piperStore.delete(it) } } }
+                .onFailure { problems += "voices: ${it.message}" }
+            runCatching { deleteLanguageModel(code) }
+                .onFailure { problems += "translation model: ${it.message}" }
+            if (problems.isEmpty()) {
+                setStatus("Removed ${option.label} and its downloads.")
+            } else {
+                setStatus("Removed ${option.label}, but couldn't delete ${problems.joinToString("; ")}", isError = true)
+            }
+            checkDownloadedAssets(manual = false)
+        }
     }
 
     private fun bindHoldButton(button: Button, sourceCode: String) {
-        button.setOnTouchListener { _, event ->
+        button.setOnTouchListener { view, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    // Once the page can scroll (there's output), a finger drifting while you talk would let
+                    // the ScrollView take over the touch and cancel the hold. Android clears this on release.
+                    view.parent?.requestDisallowInterceptTouchEvent(true)
                     onHoldDown(button, sourceCode)
                     true
                 }
 
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    android.util.Log.i(
+                        "Babeltrout",
+                        "hold $sourceCode ended by ${if (event.actionMasked == MotionEvent.ACTION_UP) "release" else "CANCEL"}",
+                    )
                     onHoldUp(button)
                     true
                 }
@@ -730,7 +900,8 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         isListening = true
 
         button.tag = button.text.toString()
-        button.text = "Release to Process"
+        // Short enough for a half-width button: a label that wraps makes the button grow under the finger.
+        button.text = "● Listening"
 
         setStatus("Listening (${labelForCode(sourceCode)})...")
 
@@ -2326,10 +2497,11 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     }
 
     /**
-     * Downloads Google's offline voice and (Android 13+) the on-device speech recognition pack for every
-     * language, so first use doesn't pause. Returns a summary for the status line.
+     * Downloads Google's offline voice and (Android 13+) the on-device speech recognition pack for
+     * [options] (default: all of the user's languages), so first use doesn't pause. Returns a summary
+     * for the status line.
      */
-    private suspend fun installSystemLanguagePacks(): String {
+    private suspend fun installSystemLanguagePacks(options: List<LanguageOption> = languageOptions): String {
         val parts = mutableListOf<String>()
 
         val tts = resolveGoogleTtsPackageName()?.let { createTtsForProbe(it) }
@@ -2337,8 +2509,8 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             parts += "Voices: Google speech engine not found."
         } else {
             try {
-                val outcomes = languageOptions.mapIndexed { index, option ->
-                    setStatus("Installing voices ${index + 1}/${languageOptions.size}: ${option.label}")
+                val outcomes = options.mapIndexed { index, option ->
+                    setStatus("Installing voices ${index + 1}/${options.size}: ${option.label}")
                     option to SystemLanguagePacks.prefetchVoice(tts, option, cacheDir)
                 }
                 parts += "Voices: ${describePackOutcomes(outcomes)}."
@@ -2354,8 +2526,8 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
                 parts += "Offline speech recognition isn't available on this phone."
             } else {
                 try {
-                    val outcomes = languageOptions.mapIndexed { index, option ->
-                        setStatus("Installing speech recognition ${index + 1}/${languageOptions.size}: ${option.label}")
+                    val outcomes = options.mapIndexed { index, option ->
+                        setStatus("Installing speech recognition ${index + 1}/${options.size}: ${option.label}")
                         option to packs.ensure(option)
                     }
                     parts += "Offline speech recognition: ${describePackOutcomes(outcomes)}."
@@ -2428,6 +2600,14 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
 
             isCheckingAssets = false
             binding.btnCheckAssets.isEnabled = true
+        }
+    }
+
+    private suspend fun deleteLanguageModel(code: String) {
+        if (code == Languages.PIVOT_CODE) return
+        val language = TranslateLanguage.fromLanguageTag(code) ?: return
+        withContext(Dispatchers.IO) {
+            remoteModelManager.deleteDownloadedModel(TranslateRemoteModel.Builder(language).build()).await()
         }
     }
 
@@ -3113,6 +3293,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
 
     private companion object {
         const val PREF_TARGET_CODE = "target_code"
+        const val PREF_LANGUAGES = "languages"
         const val PREF_CONVERSE_A = "converse_code_a"
         const val PREF_CONVERSE_B = "converse_code_b"
         const val PREF_CONVERSE_SEGMENTED = "converse_segmented_session"
