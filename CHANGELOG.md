@@ -6,8 +6,9 @@
 - Android Gradle Plugin 9.1.0 → 9.4.1, Gradle 9.3.1 → 9.8.0 (wrapper download checksum pinned), Kotlin 2.2.10 → 2.4.20.
   The app now ships Kotlin standard library 2.4.20.
 - Build-tool libraries with known CVEs (Bouncy Castle, jose4j, jdom2, commons-lang3, httpclient) are pinned to
-  patched versions in the root `build.gradle.kts`. None of these ship in the app. AGP 9.4 also drops the Netty-based
-  device-test tooling. This should clear the 51 build-tooling Dependabot alerts.
+  patched versions in the root `build.gradle.kts`, and for Android Lint's own runtime (`androidLintTool`) in
+  `app/build.gradle.kts`. None of these ship in the app. AGP 9.4 also drops the Netty-based device-test tooling.
+  Together these clear the 51 build-tooling Dependabot alerts.
 
 ## 1.4 (versionCode 5) — 2026-09-29
 
