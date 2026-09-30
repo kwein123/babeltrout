@@ -16,12 +16,17 @@
         android:textSize="28sp"
         android:textStyle="bold" />
 
+    <!-- Fixed at three lines: a status box that grew and shrank moved the push-to-talk buttons under the
+         finger. Longer messages end in "…"; tapping the box shows the whole message. -->
     <TextView
         android:id="@+id/statusText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
         android:background="@drawable/bg_status"
+        android:ellipsize="end"
+        android:maxLines="3"
+        android:minLines="3"
         android:padding="10dp"
         android:text="Idle"
         android:textColor="@color/status_text"

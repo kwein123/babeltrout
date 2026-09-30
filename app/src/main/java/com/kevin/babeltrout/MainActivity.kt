@@ -474,6 +474,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         setupConversePage()
         setupSpeechRateControl()
         setupOutputSizeControl()
+        setupStatusText()
         setupHoldButtons()
         setupUtilityButtons()
         setupBackHandling()
@@ -654,6 +655,19 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
             override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
         })
+    }
+
+    /** Tapping the status box shows the full message when it's too long for the box's three lines. */
+    private fun setupStatusText() {
+        binding.statusText.setOnClickListener {
+            val layout = binding.statusText.layout ?: return@setOnClickListener
+            val truncated = layout.lineCount > 0 && layout.getEllipsisCount(layout.lineCount - 1) > 0
+            if (!truncated) return@setOnClickListener
+            AlertDialog.Builder(this)
+                .setMessage(binding.statusText.text)
+                .setPositiveButton("OK", null)
+                .show()
+        }
     }
 
     private fun setupHoldButtons() {
