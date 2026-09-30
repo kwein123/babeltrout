@@ -813,14 +813,21 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     }
 
     private fun bindHoldButton(button: Button, sourceCode: String) {
-        button.setOnTouchListener { _, event ->
+        button.setOnTouchListener { view, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    // Once the page can scroll (there's output), a finger drifting while you talk would let
+                    // the ScrollView take over the touch and cancel the hold. Android clears this on release.
+                    view.parent?.requestDisallowInterceptTouchEvent(true)
                     onHoldDown(button, sourceCode)
                     true
                 }
 
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    android.util.Log.i(
+                        "Babeltrout",
+                        "hold $sourceCode ended by ${if (event.actionMasked == MotionEvent.ACTION_UP) "release" else "CANCEL"}",
+                    )
                     onHoldUp(button)
                     true
                 }
@@ -879,7 +886,8 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         isListening = true
 
         button.tag = button.text.toString()
-        button.text = "Release to Process"
+        // Short enough for a half-width button: a label that wraps makes the button grow under the finger.
+        button.text = "● Listening"
 
         setStatus("Listening (${labelForCode(sourceCode)})...")
 
