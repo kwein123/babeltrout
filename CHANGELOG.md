@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.5 (versionCode 6) — 2026-09-30
 
 ### Build
 - Android Gradle Plugin 9.1.0 → 9.4.1, Gradle 9.3.1 → 9.8.0 (wrapper download checksum pinned), Kotlin 2.2.10 → 2.4.20.
