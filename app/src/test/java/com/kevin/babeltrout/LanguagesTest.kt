@@ -28,8 +28,8 @@ class LanguagesTest {
 
     @Test
     fun `every language has a unique code, locale and sample`() {
-        assertEquals(Languages.all.size, Languages.codes.size)
-        Languages.all.forEach {
+        assertEquals(Languages.catalog.size, Languages.codes.size)
+        Languages.catalog.forEach {
             assertTrue(it.localeTag.startsWith(it.code + "-"))
             assertTrue(it.sampleText.isNotBlank())
             assertTrue("sample for ${it.code} should be in its own script",

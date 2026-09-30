@@ -1,11 +1,13 @@
 # Babeltrout
 
-An Android speech-to-speech translator built for real conversations in **English, Farsi, Ukrainian,
-Russian, Arabic, Hindi, French, Spanish and German**. Hold a button and speak; Babeltrout transcribes, translates
+An Android speech-to-speech translator built for real conversations. It starts with **English, Farsi,
+Ukrainian, Russian, Arabic, Hindi, French, Spanish and German**, and you can remove those or add 16 more
+(Italian, Portuguese, Dutch, Polish, Turkish and others). Hold a button and speak; Babeltrout transcribes, translates
 on-device, speaks the result aloud and shows a pronunciation line written in *your* alphabet, so you
 can say the reply yourself.
 
 - **Push-to-talk**: hold the button for the language you're speaking.
+- **Your languages**: tap **✎ Edit** above the buttons to remove a language (and its downloads) or add one.
 - **Conversation mode**: two people, two languages, one phone. Each phrase is routed to the other language.
 - **Offline translation** with Google ML Kit (models download once, about 30 MB per language).
 - **Pronunciation hints**: Farsi, Arabic, Hindi, Ukrainian and Russian output gets a transliteration line

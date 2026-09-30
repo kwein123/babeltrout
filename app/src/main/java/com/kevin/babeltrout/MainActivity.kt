@@ -29,6 +29,7 @@ import android.util.TypedValue
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
+import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
@@ -136,10 +137,10 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     private val preferOfflineRecognition = false
     private var lastKnownDefaultTtsEngine = ""
 
-    private val languageOptions = Languages.all
+    private val languageOptions get() = languageSelection.options
 
     private val supportedCodes = Languages.codes
-    private val requiredModelCodes = Languages.codes
+    private val requiredModelCodes get() = languageSelection.codes.toSet()
 
     private val modelDownloadConditions = DownloadConditions.Builder().build()
 
@@ -158,6 +159,9 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     private var activeSourceCode: String? = null
     private var activeButton: Button? = null
     private var isListening = false
+    /** The user's languages; loaded in onCreate (prefs need the Context). */
+    private var languageSelection = LanguageSelection.defaults
+    private var isEditingLanguages = false
     private var isProcessing = false
     private var pendingPermissionSourceCode: String? = null
     private var pendingPermissionButtonId: Int? = null
@@ -465,6 +469,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         lastKnownDefaultTtsEngine = currentDefaultTtsEngine()
         initTextToSpeech()
 
+        languageSelection = LanguageSelection.parse(prefs.getString(PREF_LANGUAGES, null))
         setupTargetSpinner()
         setupConversePage()
         setupSpeechRateControl()
@@ -652,15 +657,156 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     }
 
     private fun setupHoldButtons() {
-        bindHoldButton(binding.btnHoldEn, "en")
-        bindHoldButton(binding.btnHoldFa, "fa")
-        bindHoldButton(binding.btnHoldUk, "uk")
-        bindHoldButton(binding.btnHoldRu, "ru")
-        bindHoldButton(binding.btnHoldAr, "ar")
-        bindHoldButton(binding.btnHoldFr, "fr")
-        bindHoldButton(binding.btnHoldEs, "es")
-        bindHoldButton(binding.btnHoldHi, "hi")
-        bindHoldButton(binding.btnHoldDe, "de")
+        binding.btnEditLanguages.setOnClickListener {
+            if (!isEditingLanguages && (isListening || isProcessing)) return@setOnClickListener
+            isEditingLanguages = !isEditingLanguages
+            renderHoldButtons()
+        }
+        renderHoldButtons()
+    }
+
+    /**
+     * Builds the push-to-talk grid from [languageSelection], two buttons per row. In edit mode the same
+     * buttons remove their language when tapped, and a final "+ Add language" button opens the picker.
+     */
+    private fun renderHoldButtons() {
+        val grid = binding.holdButtonGrid
+        grid.removeAllViews()
+        binding.btnEditLanguages.text = if (isEditingLanguages) "Done" else "✎ Edit"
+        binding.holdButtonsHeader.text =
+            if (isEditingLanguages) "Tap a language to remove it" else "Hold one source button while speaking"
+
+        val buttons = languageSelection.options.map { option -> languageButton(option) }.toMutableList()
+        if (isEditingLanguages) {
+            buttons += newHoldButton().apply {
+                text = "+ Add language"
+                isEnabled = languageSelection.addable.isNotEmpty()
+                setOnClickListener { showAddLanguageDialog() }
+            }
+        }
+
+        buttons.chunked(2).forEachIndexed { rowIndex, pair ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { if (rowIndex > 0) topMargin = dp(8) }
+            }
+            pair.forEachIndexed { index, button ->
+                (button.layoutParams as LinearLayout.LayoutParams).marginStart = if (index > 0) dp(8) else 0
+                row.addView(button)
+            }
+            grid.addView(row)
+        }
+    }
+
+    private fun languageButton(option: LanguageOption): Button = newHoldButton().apply {
+        id = View.generateViewId()
+        if (!isEditingLanguages) {
+            text = option.label
+            bindHoldButton(this, option.code)
+            return@apply
+        }
+        val removable = languageSelection.canRemove(option.code)
+        text = if (removable) "${option.label}  ✕" else option.label
+        backgroundTintList = ContextCompat.getColorStateList(this@MainActivity, R.color.secondary_button)
+        alpha = if (removable) 1f else 0.5f
+        setOnClickListener {
+            if (removable) {
+                confirmRemoveLanguage(option)
+            } else if (option.code == Languages.PIVOT_CODE) {
+                setStatus("English can't be removed: every translation goes through it.")
+            } else {
+                setStatus("Keep at least ${LanguageSelection.MIN_SIZE} languages so conversation mode has a pair.")
+            }
+        }
+    }
+
+    private fun newHoldButton(): Button =
+        layoutInflater.inflate(R.layout.item_hold_button, binding.holdButtonGrid, false) as Button
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun saveLanguageSelection(selection: LanguageSelection) {
+        languageSelection = selection
+        prefs.edit().putString(PREF_LANGUAGES, selection.serialize()).apply()
+        renderHoldButtons()
+        // Spinners re-read their saved choice; one pointing at a removed language falls back to the default.
+        setupTargetSpinner()
+        bindLanguageSpinner(binding.converseLangASpinner, PREF_CONVERSE_A, "en")
+        bindLanguageSpinner(binding.converseLangBSpinner, PREF_CONVERSE_B, "fa")
+    }
+
+    private fun showAddLanguageDialog() {
+        val addable = languageSelection.addable
+        if (addable.isEmpty()) return
+        AlertDialog.Builder(this)
+            .setTitle("Add a language")
+            .setItems(addable.map { it.label }.toTypedArray()) { _, which -> addLanguage(addable[which]) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun addLanguage(option: LanguageOption) {
+        saveLanguageSelection(languageSelection.add(option.code))
+        setStatus("Added ${option.label}. Downloading its translation model...")
+        appScope.launch {
+            runCatching { ensureLanguageModel(option.code) }
+                .onSuccess {
+                    setStatus("Added ${option.label}. Tap Install Assets for its voice and offline speech pack.")
+                }
+                .onFailure { error ->
+                    setStatus("Added ${option.label}, but its translation model didn't download: ${error.message}", isError = true)
+                }
+            checkDownloadedAssets(manual = false)
+        }
+    }
+
+    private fun confirmRemoveLanguage(option: LanguageOption) {
+        val piperVoices = piperStore.installed(option.code)
+        val details = buildList {
+            add("This deletes its translation model.")
+            if (piperVoices.isNotEmpty()) {
+                add("It also deletes ${piperVoices.size} built-in ${option.label} voice${if (piperVoices.size == 1) "" else "s"}.")
+            }
+            add("Google's ${option.label} voice and offline speech pack belong to Android; remove them in Android's settings if you want the space back.")
+            add("You can add ${option.label} again any time.")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Remove ${option.label}?")
+            .setMessage(details.joinToString("\n\n"))
+            .setPositiveButton("Remove") { _, _ -> removeLanguage(option) }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    /** Removes [option]'s button and the downloads only it uses (its ML Kit model and Piper voices). */
+    private fun removeLanguage(option: LanguageOption) {
+        val code = option.code
+        saveLanguageSelection(languageSelection.remove(code))
+        prefs.edit().remove(PREF_VOICE_PREFIX + code).apply()
+        availableTtsByCode.remove(code)
+        synchronized(translatorCache) {
+            translatorCache.keys.filter { code in it.split("->") }.forEach { translatorCache.remove(it)?.close() }
+        }
+        synchronized(readyTranslatorPairs) { readyTranslatorPairs.removeAll { code in it.split("->") } }
+
+        val piperVoices = piperStore.installed(code)
+        if (piperVoices.isNotEmpty()) piperSpeaker.stop()
+        appScope.launch {
+            val problems = mutableListOf<String>()
+            runCatching { withContext(Dispatchers.IO) { piperVoices.forEach { piperStore.delete(it) } } }
+                .onFailure { problems += "voices: ${it.message}" }
+            runCatching { deleteLanguageModel(code) }
+                .onFailure { problems += "translation model: ${it.message}" }
+            if (problems.isEmpty()) {
+                setStatus("Removed ${option.label} and its downloads.")
+            } else {
+                setStatus("Removed ${option.label}, but couldn't delete ${problems.joinToString("; ")}", isError = true)
+            }
+            checkDownloadedAssets(manual = false)
+        }
     }
 
     private fun bindHoldButton(button: Button, sourceCode: String) {
@@ -2431,6 +2577,14 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         }
     }
 
+    private suspend fun deleteLanguageModel(code: String) {
+        if (code == Languages.PIVOT_CODE) return
+        val language = TranslateLanguage.fromLanguageTag(code) ?: return
+        withContext(Dispatchers.IO) {
+            remoteModelManager.deleteDownloadedModel(TranslateRemoteModel.Builder(language).build()).await()
+        }
+    }
+
     private suspend fun ensureLanguageModel(code: String) {
         val language = TranslateLanguage.fromLanguageTag(code)
             ?: error("Translation language not supported: $code")
@@ -3113,6 +3267,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
 
     private companion object {
         const val PREF_TARGET_CODE = "target_code"
+        const val PREF_LANGUAGES = "languages"
         const val PREF_CONVERSE_A = "converse_code_a"
         const val PREF_CONVERSE_B = "converse_code_b"
         const val PREF_CONVERSE_SEGMENTED = "converse_segmented_session"
