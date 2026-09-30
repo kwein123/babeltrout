@@ -1099,6 +1099,9 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
 
     private fun updateConverseToggleUi() {
         binding.btnConverseToggle.text = if (isConverseActive) "Conversation Mic: ON" else "Conversation Mic: OFF"
+        // Red while the conversation mic is on, so its state is obvious at a glance.
+        binding.btnConverseToggle.backgroundTintList =
+            ContextCompat.getColorStateList(this, if (isConverseActive) R.color.mic_live else R.color.primary)
         updateConverseMicIndicator()
     }
 
