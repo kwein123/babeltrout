@@ -12,7 +12,7 @@ class PiperSpeakerTest {
     @Test
     fun `audio callback exposes the JNI signature sherpa-onnx calls`() {
         val method = PiperSpeaker.StreamingSink::class.java.getMethod("invoke", FloatArray::class.java)
-        assertEquals(Integer::class.java, method.returnType)
+        assertEquals(Int::class.javaObjectType, method.returnType) // java.lang.Integer, not primitive int
     }
 
     @Test

@@ -132,7 +132,7 @@ user's explicit export. Backup and device transfer are disabled (`data_extractio
 
 ## Build configuration
 
-* AGP 9.1, Gradle 9.3.1, JDK 21 toolchain, compile and target SDK 36, min SDK 26.
+* AGP 9.4.1, Gradle 9.8.0, Kotlin 2.4.20, JDK 21 toolchain, compile and target SDK 36, min SDK 26.
 * Release builds: R8 minify and resource shrinking; one APK per CPU type (`arm64-v8a` about 47 MB,
   `armeabi-v7a` about 33 MB). Signing comes from `keystore.properties`, which is git-ignored.
 * sherpa-onnx comes from JitPack (restricted to its group in `settings.gradle.kts`); its AAR has no
