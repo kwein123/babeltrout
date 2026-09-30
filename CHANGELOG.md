@@ -1,13 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.6 (versionCode 7) — 2026-09-30
 
 ### Added
 - **Choose your languages.** Tap **✎ Edit** above the push-to-talk buttons: tap a language to remove it (this
   deletes its translation model and built-in voices), or **+ Add language** to add one of 16 more: Catalan,
   Croatian, Czech, Danish, Dutch, Finnish, Hungarian, Indonesian, Italian, Polish, Portuguese, Romanian,
   Slovak, Swedish, Turkish or Vietnamese. English always stays (all translations go through it), and at
-  least two languages remain. The menus and Install Assets follow your list.
+  least two languages remain. The menus and Install Assets follow your list. Adding a language also
+  downloads its voice and offline speech pack (on Wi-Fi), so its first sentence is quick.
 - **German** (speech, translation, voice), with a hold button next to Hindi. Tap Install assets once to download
   its translation model (~30 MB).
 - Language detection recognizes German marker words and ä/ö/ü/ß. "ü" no longer counts as a French clue.
@@ -17,6 +18,10 @@
 
 ### Changed
 - The **Conversation Mic** button turns red while it's on.
+- Push-to-talk buttons no longer move while held: the held button reads "● Listening" instead of wrapping to
+  two lines, and scrolling can't take over a hold.
+- The status box is always three lines tall, so the buttons don't shift when its message changes. Tap it to
+  read a message that ends in "…".
 
 ### Removed
 - The **Auto** push-to-talk button. Google's recognizer can't detect the spoken language online (it fell
