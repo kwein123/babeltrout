@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4 (versionCode 5) — 2026-09-29
 
 ### Security
 - ML Kit translate 17.0.3 (still the latest) bundled OkHttp 3.0.0 and Okio 1.6.0. They are now forced to
