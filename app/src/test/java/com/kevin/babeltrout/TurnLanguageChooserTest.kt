@@ -100,4 +100,16 @@ class TurnLanguageChooserTest {
         assertFalse(TurnLanguageChooser.matchesOwnScript(Candidate("en", "хау ар ю", null)))
         assertFalse(TurnLanguageChooser.matchesOwnScript(Candidate("en", "123", null)))
     }
+
+    @Test
+    fun `german speech in an english-german conversation - marker words decide`() {
+        // Both Latin script, no confidences or text scores: the German marker words break the tie.
+        val choice = choose(
+            Candidate("en", "vo isst dare barn off", null),
+            Candidate("de", "Wo ist der Bahnhof", null),
+            last = "de",
+        )!!
+        assertEquals("de", choice.candidate.languageCode)
+        assertEquals("marker words", choice.reason)
+    }
 }

@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **German** (speech, translation, voice), with a hold button next to Hindi. Tap Install assets once to download
+  its translation model (~30 MB).
+- Language detection recognizes German marker words and ä/ö/ü/ß. "ü" no longer counts as a French clue.
+- **Install Assets** also downloads Google's offline voice and (Android 13+) the offline speech recognition
+  pack for every language that has one, so the first use of a language doesn't pause. It asks before using
+  mobile data. First-run setup still downloads translation models only.
+
+### Changed
+- The **Conversation Mic** button turns red while it's on.
+
+### Removed
+- The **Auto** push-to-talk button. Google's recognizer can't detect the spoken language online (it fell
+  back to English), so every language now has its own button.
+
 ## 1.5 (versionCode 6) — 2026-09-30
 
 ### Build

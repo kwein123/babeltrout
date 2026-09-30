@@ -1,11 +1,11 @@
 # Babeltrout
 
 An Android speech-to-speech translator built for real conversations in **English, Farsi, Ukrainian,
-Russian, Arabic, Hindi, French and Spanish**. Hold a button and speak; Babeltrout transcribes, translates
+Russian, Arabic, Hindi, French, Spanish and German**. Hold a button and speak; Babeltrout transcribes, translates
 on-device, speaks the result aloud and shows a pronunciation line written in *your* alphabet, so you
 can say the reply yourself.
 
-- **Push-to-talk**: hold *Auto* (detects the language) or a fixed-language button (faster, more accurate).
+- **Push-to-talk**: hold the button for the language you're speaking.
 - **Conversation mode**: two people, two languages, one phone. Each phrase is routed to the other language.
 - **Offline translation** with Google ML Kit (models download once, about 30 MB per language).
 - **Pronunciation hints**: Farsi, Arabic, Hindi, Ukrainian and Russian output gets a transliteration line
@@ -92,7 +92,7 @@ Every push also runs the unit tests via [android-ci.yml](.github/workflows/andro
 
 | Symptom | Fix |
 |---|---|
-| Nothing is recognized | Check microphone permission; try a fixed-language button instead of Auto. |
+| Nothing is recognized | Check microphone permission, and that you're holding the button for the language you're speaking. |
 | "language unavailable" | Install that language's offline speech pack in Android Settings → Google → Voice, or stay online. |
 | Translation fails for a language | Setup → **Install Assets** again with internet on. |
 | Farsi is silent | Setup → **Diagnose Farsi TTS** and follow its fix list; see [docs/FARSI_VOICES.md](docs/FARSI_VOICES.md). |

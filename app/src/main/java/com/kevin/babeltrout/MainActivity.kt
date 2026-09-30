@@ -218,7 +218,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         }
 
         val button = buttonId?.let { findViewById<Button>(it) }
-        if (button != null) {
+        if (button != null && sourceCode != null) {
             startListening(button, sourceCode)
             return@registerForActivityResult
         }
@@ -652,7 +652,6 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
     }
 
     private fun setupHoldButtons() {
-        bindHoldButton(binding.btnHoldAuto, null)
         bindHoldButton(binding.btnHoldEn, "en")
         bindHoldButton(binding.btnHoldFa, "fa")
         bindHoldButton(binding.btnHoldUk, "uk")
@@ -661,9 +660,10 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         bindHoldButton(binding.btnHoldFr, "fr")
         bindHoldButton(binding.btnHoldEs, "es")
         bindHoldButton(binding.btnHoldHi, "hi")
+        bindHoldButton(binding.btnHoldDe, "de")
     }
 
-    private fun bindHoldButton(button: Button, sourceCode: String?) {
+    private fun bindHoldButton(button: Button, sourceCode: String) {
         button.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -681,7 +681,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         }
     }
 
-    private fun onHoldDown(button: Button, sourceCode: String?) {
+    private fun onHoldDown(button: Button, sourceCode: String) {
         if (isConverseActive) {
             setStatus("Conversation mode is active. Turn off Conversation Mic before push-to-talk.")
             return
@@ -718,7 +718,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         stopListening()
     }
 
-    private fun startListening(button: Button, sourceCode: String?) {
+    private fun startListening(button: Button, sourceCode: String) {
         if (isListening || isProcessing) {
             return
         }
@@ -732,10 +732,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         button.tag = button.text.toString()
         button.text = "Release to Process"
 
-        setStatus(
-            if (sourceCode == null) "Listening (auto detect)..."
-            else "Listening (${labelForCode(sourceCode)})..."
-        )
+        setStatus("Listening (${labelForCode(sourceCode)})...")
 
         runCatching {
             speechRecognizer.startListening(recognitionIntent)
@@ -765,32 +762,16 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         runCatching { speechRecognizer.stopListening() }
     }
 
-    private fun buildRecognitionIntent(sourceCode: String?): Intent {
+    private fun buildRecognitionIntent(sourceCode: String): Intent {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         intent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOfflineRecognition)
         intent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
         intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5)
 
-        if (sourceCode != null) {
-            val recognitionTag = recognitionTagForCode(sourceCode)
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionTag)
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, recognitionTag)
-        } else {
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "und")
-            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "und")
-            intent.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
-            intent.putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_QUICK_RESPONSE)
-            val allowedTags = ArrayList(languageOptions.map { it.localeTag })
-            intent.putStringArrayListExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES,
-                allowedTags
-            )
-            intent.putStringArrayListExtra(
-                RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES,
-                allowedTags
-            )
-        }
+        val recognitionTag = recognitionTagForCode(sourceCode)
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionTag)
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, recognitionTag)
 
         return intent
     }
@@ -1098,6 +1079,9 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
 
     private fun updateConverseToggleUi() {
         binding.btnConverseToggle.text = if (isConverseActive) "Conversation Mic: ON" else "Conversation Mic: OFF"
+        // Red while the conversation mic is on, so its state is obvious at a glance.
+        binding.btnConverseToggle.backgroundTintList =
+            ContextCompat.getColorStateList(this, if (isConverseActive) R.color.mic_live else R.color.primary)
         updateConverseMicIndicator()
     }
 
@@ -1349,7 +1333,19 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
         }
 
         binding.btnInstallAssets.setOnClickListener {
-            installMissingAssets(manual = true)
+            if (isOnMeteredNetwork()) {
+                AlertDialog.Builder(this)
+                    .setTitle("Use mobile data?")
+                    .setMessage(
+                        "Install Assets downloads translation models, voices and offline speech recognition " +
+                            "for every language, which can be several hundred MB, and you're not on Wi-Fi."
+                    )
+                    .setPositiveButton("Download") { _, _ -> installMissingAssets(manual = true) }
+                    .setNegativeButton("Wait for Wi-Fi", null)
+                    .show()
+            } else {
+                installMissingAssets(manual = true)
+            }
         }
 
         binding.btnCheckAssets.setOnClickListener {
@@ -2307,6 +2303,9 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
                 }
             }
 
+            // Only when the user asks: voices and speech packs can be large (first run gets models only).
+            val packSummary = if (manual) installSystemLanguagePacks() else ""
+
             binding.btnInstallAssets.isEnabled = true
             if (!isCheckingAssets) {
                 binding.btnCheckAssets.isEnabled = true
@@ -2315,16 +2314,73 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
 
             if (failures.isEmpty()) {
                 prefs.edit().putBoolean("assets_ready", true).apply()
-                setStatus("All offline translation assets are installed.")
+                setStatus("All offline translation assets are installed. $packSummary".trim())
             } else {
                 prefs.edit().putBoolean("assets_ready", false).apply()
                 val summary = failures.firstOrNull() ?: "unknown issue"
-                setStatus("Asset install partial: $summary", isError = true)
+                setStatus("Asset install partial: $summary. $packSummary".trim(), isError = true)
             }
 
             checkDownloadedAssets(manual = false)
         }
     }
+
+    /**
+     * Downloads Google's offline voice and (Android 13+) the on-device speech recognition pack for every
+     * language, so first use doesn't pause. Returns a summary for the status line.
+     */
+    private suspend fun installSystemLanguagePacks(): String {
+        val parts = mutableListOf<String>()
+
+        val tts = resolveGoogleTtsPackageName()?.let { createTtsForProbe(it) }
+        if (tts == null) {
+            parts += "Voices: Google speech engine not found."
+        } else {
+            try {
+                val outcomes = languageOptions.mapIndexed { index, option ->
+                    setStatus("Installing voices ${index + 1}/${languageOptions.size}: ${option.label}")
+                    option to SystemLanguagePacks.prefetchVoice(tts, option, cacheDir)
+                }
+                parts += "Voices: ${describePackOutcomes(outcomes)}."
+            } finally {
+                tts.stop()
+                tts.shutdown()
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val packs = SystemLanguagePacks.RecognitionPacks.create(this)
+            if (packs == null) {
+                parts += "Offline speech recognition isn't available on this phone."
+            } else {
+                try {
+                    val outcomes = languageOptions.mapIndexed { index, option ->
+                        setStatus("Installing speech recognition ${index + 1}/${languageOptions.size}: ${option.label}")
+                        option to packs.ensure(option)
+                    }
+                    parts += "Offline speech recognition: ${describePackOutcomes(outcomes)}."
+                } finally {
+                    packs.destroy()
+                }
+            }
+        }
+        return parts.joinToString(" ")
+    }
+
+    private fun describePackOutcomes(outcomes: List<Pair<LanguageOption, SystemLanguagePacks.Outcome>>): String =
+        outcomes.groupBy({ it.second }, { it.first.label })
+            .toSortedMap()
+            .entries
+            .joinToString("; ") { (outcome, labels) ->
+                val heading = when (outcome) {
+                    SystemLanguagePacks.Outcome.READY -> "ready"
+                    SystemLanguagePacks.Outcome.DOWNLOADED -> "downloaded"
+                    SystemLanguagePacks.Outcome.DOWNLOADING -> "still downloading"
+                    SystemLanguagePacks.Outcome.NOT_OFFERED -> "not offered"
+                    SystemLanguagePacks.Outcome.FAILED -> "failed"
+                }
+                "$heading ${labels.joinToString(", ")}"
+            }
 
     private fun checkDownloadedAssets(manual: Boolean) {
         if (isCheckingAssets) {
@@ -2827,13 +2883,7 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
                 appendOutput(sourceCode, transcript, targetCode, targetText, transliteration)
                 speakTarget(targetText, targetCode)
 
-                val sourceInfo = if (sourceHint == null) {
-                    "Detected ${labelForCode(sourceCode)}"
-                } else {
-                    "Used ${labelForCode(sourceCode)}"
-                }
-
-                setStatus("$sourceInfo, translated to ${labelForCode(targetCode)} (${route.joinToString(" -> ")})")
+                setStatus("Used ${labelForCode(sourceCode)}, translated to ${labelForCode(targetCode)} (${route.joinToString(" -> ")})")
             }.onFailure { error ->
                 setStatus("Processing failed: ${error.message}", isError = true)
             }
@@ -2852,32 +2902,10 @@ class MainActivity : AppCompatActivity(), RecognitionListener {
             error("No speech detected.")
         }
 
-        val normalizedHint = normalizeCode(sourceHint)
-        if (normalizedHint in supportedCodes) {
-            val transcript = pickBestTranscriptForForcedSource(candidates, normalizedHint)
-            return transcript to normalizedHint
-        }
-
-        return pickBestAutoTranscript(candidates)
-    }
-
-    private suspend fun pickBestAutoTranscript(candidates: List<String>): Pair<String, String> {
-        var bestTranscript = candidates.first()
-        var bestSource = detectSourceLanguage(bestTranscript)
-        var bestScore = ScriptHeuristics.scoreAutoCandidate(bestTranscript, bestSource, 0)
-
-        for (index in 1 until candidates.size) {
-            val candidate = candidates[index]
-            val detectedSource = detectSourceLanguage(candidate)
-            val candidateScore = ScriptHeuristics.scoreAutoCandidate(candidate, detectedSource, index)
-            if (candidateScore > bestScore) {
-                bestTranscript = candidate
-                bestSource = detectedSource
-                bestScore = candidateScore
-            }
-        }
-
-        return bestTranscript to bestSource
+        // Every hold button names its language (Google's recognizer can't auto-detect one online).
+        val sourceCode = normalizeCode(sourceHint).takeIf { it in supportedCodes }
+            ?: error("No source language selected.")
+        return pickBestTranscriptForForcedSource(candidates, sourceCode) to sourceCode
     }
 
     private fun pickBestTranscriptForForcedSource(candidates: List<String>, sourceCode: String): String =
