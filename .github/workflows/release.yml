@@ -64,8 +64,24 @@ jobs:
             files+=("$apk")
           done
           sha256sum "${files[@]}" > SHA256SUMS.txt
-          gh release create "$GITHUB_REF_NAME" "${files[@]}" SHA256SUMS.txt --generate-notes \
-            --notes "Most phones: download the **arm64-v8a** APK. Older 32-bit phones: armeabi-v7a." 
+
+          # Release notes: download hint, then this version's CHANGELOG.md section. GitHub appends its
+          # generated list of merged PRs after these notes.
+          version="${GITHUB_REF_NAME#v}"
+          if ! section="$(scripts/changelog_section.sh "$version")"; then
+            echo "::warning::CHANGELOG.md has no section for $version; release notes list PRs only."
+            section=""
+          fi
+          {
+            echo "Most phones: download the **arm64-v8a** APK. Older 32-bit phones: armeabi-v7a."
+            if [ -n "$section" ]; then
+              echo
+              echo "## What's new in $version"
+              echo
+              echo "$section"
+            fi
+          } > release-notes.md
+          gh release create "$GITHUB_REF_NAME" "${files[@]}" SHA256SUMS.txt --generate-notes --notes-file release-notes.md
 
       - name: Remove signing material
         if: always()

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Build
+- GitHub release notes now include that version's section of this changelog, above GitHub's list of merged
+  PRs (`scripts/changelog_section.sh`).
+
 ## 1.6 (versionCode 7) — 2026-09-30
 
 ### Added
