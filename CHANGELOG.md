@@ -1,6 +1,12 @@
 # Changelog
 
-## 1.3 (versionCode 4) — unreleased
+## Unreleased
+
+### Security
+- ML Kit translate 17.0.3 (still the latest) bundled OkHttp 3.0.0 and Okio 1.6.0. They are now forced to
+  OkHttp 4.12.0 and Okio 3.6.0, fixing CVE-2021-0341, CVE-2016-2402 and CVE-2023-3635.
+
+## 1.3 (versionCode 4) — 2026-09-29
 
 ### Added
 - **Hands-free conversation** (Android 13+, default on): Babeltrout keeps its own microphone open and
