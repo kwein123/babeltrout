@@ -1,0 +1,11 @@
+{
+  "name": "babeltrout-install-guide",
+  "private": true,
+  "description": "Builds docs/Babeltrout-Install-Guide*.docx (one-page install guides for new users).",
+  "scripts": {
+    "build": "node make_guide.js ../../docs/Babeltrout-Install-Guide.docx && node make_guide_fa.js ../../docs/Babeltrout-Install-Guide-fa.docx"
+  },
+  "dependencies": {
+    "docx": "9.9.0"
+  }
+}

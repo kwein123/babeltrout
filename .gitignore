@@ -21,3 +21,6 @@
 *.onnx
 !fa_IR-amir-medium.onnx
 !app/src/main/assets/silero_vad.onnx
+
+# Install-guide build tools
+node_modules/
