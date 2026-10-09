@@ -24,7 +24,7 @@ Tick items off as they land (`- [x]`).
 | 14 | Move UI strings to `strings.xml`; Farsi/Ukrainian UI | Localized app, accessibility | 3 hr | translate/check |
 | 15 | Accessibility pass | TalkBack, haptics, content descriptions | 2 hr | test |
 | 16 | Phrasebook (saved phrases with audio) | Clinic / front-desk use | 4 hr | — |
-| 17 | Dependabot / Renovate | Keep Gradle and Actions current | 10 min | approve PRs |
+| 17 | ~~Dependabot / Renovate~~ ✅ done (Oct 2026) | Keep Gradle and Actions current | — | approve PRs |
 | 18 | Split `MainActivity` into ViewModel + services | Testability, stability | 1–2 days | — |
 | 19 | **sherpa-onnx inside the app** — ✅ done in 1.3 (built-in voices + hands-free VAD conversation) | — | — | — |
 | 20 | Persian G2P (ezafe-aware) | Correct Farsi vowels in speech and pronunciation line | 1 week | review |
@@ -112,7 +112,8 @@ content descriptions, TalkBack announcements, haptics on hold/release.
 Star an entry to save it (text + transliteration); saved list works offline and replays audio.
 
 ### 17. Dependabot
-Add `.github/dependabot.yml` for Gradle and GitHub Actions. **You:** merge its PRs occasionally.
+✅ Done: `.github/dependabot.yml` opens monthly PRs for GitHub Actions and Gradle. **You:** merge its PRs
+when CI is green. It skips gradle/actions v6+ (new proprietary terms) until you decide on that.
 
 ### 18. Refactor
 ViewModel + `SpeechCapture`, `TranslationService`, `TtsRouter` classes; opens the door to Compose and

@@ -22,16 +22,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           lfs: false
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
 
-      - uses: gradle/actions/setup-gradle@v4
+      # v5 is the newest MIT-licensed major; v6 moves caching into a proprietary component with its own
+      # terms of use (https://blog.gradle.org/github-actions-for-gradle-v6). Dependabot ignores v6+.
+      - uses: gradle/actions/setup-gradle@v5
 
       - name: Restore signing key
         env:
