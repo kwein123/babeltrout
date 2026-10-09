@@ -12,13 +12,13 @@ buildscript {
             classpath("org.bouncycastle:bcutil-jdk18on:1.86") {
                 because("kept in step with bcprov and bcpkix")
             }
-            classpath("org.bitbucket.b_c:jose4j:0.9.6") {
+            classpath("org.bitbucket.b_c:jose4j:0.9.7") {
                 because("CVE fixed in 0.9.6 (Dependabot #17); AGP 9.4.1 has 0.9.5")
             }
             classpath("org.jdom:jdom2:2.0.6.1") {
                 because("XXE CVE fixed in 2.0.6.1 (Dependabot #14); AGP 9.4.1 has 2.0.6")
             }
-            classpath("org.apache.commons:commons-lang3:3.18.0") {
+            classpath("org.apache.commons:commons-lang3:3.21.0") {
                 because("CVE fixed in 3.18.0 (Dependabot #10); AGP 9.4.1 has 3.16.0")
             }
             classpath("org.apache.httpcomponents:httpclient:4.5.14") {

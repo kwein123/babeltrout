@@ -95,14 +95,14 @@ android {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.18.0")
-    implementation("androidx.appcompat:appcompat:1.7.1")
-    implementation("com.google.android.material:material:1.13.0")
-    implementation("androidx.constraintlayout:constraintlayout:2.2.1")
+    implementation("androidx.core:core-ktx:1.19.1")
+    implementation("androidx.appcompat:appcompat:1.8.0")
+    implementation("com.google.android.material:material:1.14.0")
+    implementation("androidx.constraintlayout:constraintlayout:2.2.2")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
 
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.11.0")
 
     implementation("com.google.mlkit:translate:17.0.3")
     implementation("com.google.mlkit:language-id:17.0.6")
@@ -114,8 +114,8 @@ dependencies {
         implementation("com.squareup.okhttp3:okhttp:4.12.0") {
             because("CVE-2021-0341 (fixed in 4.9.2) and CVE-2016-2402 (fixed in 3.1.2) in okhttp 3.0.0 from ML Kit translate")
         }
-        implementation("com.squareup.okio:okio:3.6.0") {
-            because("CVE-2023-3635 in okio 1.6.0 from ML Kit translate (fixed in 1.17.6 / 3.4.0); 3.6.0 matches okhttp 4.12.0")
+        implementation("com.squareup.okio:okio:3.18.2") {
+            because("CVE-2023-3635 in okio 1.6.0 from ML Kit translate (fixed in 1.17.6 / 3.4.0); 3.18.2 matches okhttp 4.12.0")
         }
     }
 
@@ -139,7 +139,7 @@ dependencies {
         "androidLintTool"("org.bouncycastle:bcutil-jdk18on:1.86") {
             because("kept in step with bcprov and bcpkix")
         }
-        "androidLintTool"("org.apache.commons:commons-lang3:3.18.0") {
+        "androidLintTool"("org.apache.commons:commons-lang3:3.21.0") {
             because("CVE fixed in 3.18.0 (Dependabot #10); lint has 3.16.0")
         }
         "androidLintTool"("org.apache.httpcomponents:httpclient:4.5.14") {
