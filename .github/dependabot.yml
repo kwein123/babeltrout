@@ -1,0 +1,25 @@
+# Opens pull requests when GitHub Actions or Gradle dependencies have new versions, so the build doesn't
+# quietly fall behind (deprecated Node versions, retired actions, security fixes). Merge them like any PR.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      github-actions:
+        patterns: ["*"]
+    ignore:
+      # v6+ adds a proprietary caching component with separate terms; staying on v5 until that's decided.
+      - dependency-name: gradle/actions*
+        versions: [">= 6"]
+
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for routine minor and patch bumps; major versions arrive separately for a closer look.
+      gradle-minor-and-patch:
+        update-types: [minor, patch]
