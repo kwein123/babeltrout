@@ -5,6 +5,10 @@
 ### Build
 - GitHub release notes now include that version's section of this changelog, above GitHub's list of merged
   PRs (`scripts/changelog_section.sh`).
+- CI and releases no longer download a JDK from foojay: Gradle runs on any installed Java 21. The pinned
+  foojay links had stopped working (HTTP 400) and broke every build in October 2026.
+- GitHub Actions updated to Node 24 versions (checkout v7, setup-java v6, upload-artifact v7,
+  setup-gradle v5), and Dependabot now opens monthly PRs for Actions and Gradle updates.
 
 ## 1.6 (versionCode 7) — 2026-09-30
 
