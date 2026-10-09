@@ -54,6 +54,7 @@ input, and iPhone versions.
 
 | Doc | What's in it |
 |---|---|
+| [docs/Babeltrout-Install-Guide.docx](docs/Babeltrout-Install-Guide.docx) ([فارسی](docs/Babeltrout-Install-Guide-fa.docx)) | One-page install and setup guide for new users, including Farsi voices and storage needs |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the app is put together, the speech → translate → speak pipeline, and where to change things |
 | [docs/FARSI_VOICES.md](docs/FARSI_VOICES.md) | Every Farsi voice worth trying, how to install several, and how to pick one |
 | [docs/REVIEW-2026.md](docs/REVIEW-2026.md) | 2026 review: what changed, answers to open questions, roadmap (iPhone, packaging, conversation mode) |
@@ -61,6 +62,10 @@ input, and iPhone versions.
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 
 ## Install on a phone
+
+**One-page guide for new users** (Word, printable): [English](docs/Babeltrout-Install-Guide.docx) ·
+[فارسی](docs/Babeltrout-Install-Guide-fa.docx). It covers installing, first-time setup, Farsi voices and
+how much space each language and voice needs.
 
 **Easiest (from a release):** download `babeltrout-vX.Y-arm64-v8a.apk` (most phones) from the repository's
 [Releases](https://github.com/kwein123/babeltrout/releases) page on the phone, open it and allow the
