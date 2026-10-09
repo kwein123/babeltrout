@@ -20,7 +20,7 @@ fun requiredKeystoreProperty(name: String): String {
 
 android {
     namespace = "com.kevin.babeltrout"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.kevin.babeltrout"
