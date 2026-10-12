@@ -111,11 +111,11 @@ dependencies {
     // patched versions. OkHttp 4.12 keeps the okhttp3 package and the 3.x Java API; every OkHttp method
     // ML Kit calls was checked present with the same signature in 4.12.0 on 2026-09-29.
     constraints {
-        implementation("com.squareup.okhttp3:okhttp:4.12.0") {
+        implementation("com.squareup.okhttp3:okhttp:5.5.0") {
             because("CVE-2021-0341 (fixed in 4.9.2) and CVE-2016-2402 (fixed in 3.1.2) in okhttp 3.0.0 from ML Kit translate")
         }
         implementation("com.squareup.okio:okio:3.18.2") {
-            because("CVE-2023-3635 in okio 1.6.0 from ML Kit translate (fixed in 1.17.6 / 3.4.0); 3.18.2 matches okhttp 4.12.0")
+            because("CVE-2023-3635 in okio 1.6.0 from ML Kit translate (fixed in 1.17.6 / 3.4.0); 3.18.2 matches okhttp 5.5.0")
         }
     }
 
