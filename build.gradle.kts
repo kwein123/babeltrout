@@ -24,7 +24,7 @@ buildscript {
             classpath("org.apache.httpcomponents:httpclient:4.5.14") {
                 because("CVE fixed in 4.5.13 (Dependabot #1); AGP 9.4.1 also asks for 4.5.6")
             }
-            classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.20") {
+            classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.21") {
                 because("CVE fixed in 2.4.20 (Dependabot #49); AGP 9.4.1's built-in Kotlin uses 2.2.10")
             }
         }
@@ -32,5 +32,5 @@ buildscript {
 }
 
 plugins {
-    id("com.android.application") version "9.4.1" apply false
+    id("com.android.application") version "9.5.0" apply false
 }
